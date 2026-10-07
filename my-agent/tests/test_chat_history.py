@@ -538,3 +538,29 @@ async def test_the_model_is_told_how_saved_history_works(db: Path) -> None:
     await h.app.handle_input("Tu te souviens de notre conversation d'hier ?")
     assert TERMINAL_CHAT_NOTE in _system_notes(h.llm.requests[-1])
     await h.close()
+
+
+async def test_retry_after_an_interrupted_save_acknowledgement_adds_no_duplicate(
+    db: Path,
+) -> None:
+    h = Harness(db, ["Réponse."])
+    await h.app.start()
+    real = h.store.append_turn
+    calls: list[bool] = []
+
+    def commits_then_interrupted(*args, **kwargs):
+        calls.append(real(*args, **kwargs))  # the write commits...
+        if len(calls) == 1:
+            raise asyncio.CancelledError  # ...but the caller never learns it
+
+    h.store.append_turn = commits_then_interrupted  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await h.app.handle_input("Question unique")
+    assert len(h.app.unsaved) == 1  # still pending from the app's point of view
+
+    await h.app.close()  # quitting retries pending saves
+    assert calls == [True, False]  # the retry was recognized as already saved
+    stored = h.store.load_items(h.app.conversation_id)
+    assert [t for _, t in _texts(stored)] == ["Question unique", "Réponse."]
+    assert h.app.unsaved == []
+    h.store.close()

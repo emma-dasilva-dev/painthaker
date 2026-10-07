@@ -119,7 +119,7 @@ How saving works:
 
 - A conversation is saved after its first completed exchange. Each later exchange (your message, any tool calls with their results, and the reply) is saved as one unit.
 - A reply that fails or that you interrupt with Ctrl+C is **not** saved. It is also removed from what the model sees, so you can simply resend the message.
-- If saving fails, Painthaker says so in red. It retries on your next message and when you quit, and never claims a turn was saved when it wasn't.
+- If saving fails, Painthaker says so in red. It retries on your next message and when you quit, and never claims a turn was saved when it wasn't. Each exchange gets an ID when it completes, and the database accepts that ID only once. A retry after a save that went through but was interrupted before confirmation therefore never stores the exchange twice. Databases from earlier versions are upgraded automatically on first start, keeping all saved messages.
 - If unsaved exchanges remain, `/new` and `/resume` ask before switching, and you must type `oui` to abandon them. Anything else keeps you in the current conversation. `/delete` on the open conversation says how many unsaved exchanges would be lost too. Quitting with unsaved exchanges prints a red warning.
 - The title comes from your first message, generated locally with no model call.
 - A resumed conversation keeps its language (French or English). It uses the current instructions and today's date, so dates are never replayed from the past.
@@ -133,7 +133,7 @@ How saving works:
 
 Older exchanges are dropped as whole exchanges, newest kept first, so a tool call is never separated from its result. The exchange being answered is always sent, even if a large tool result pushes it over the budget. A **single message longer than the budget is refused** with an explanation and isn't sent or saved; it is never silently cut. Split it into parts, or raise the budget. The full transcript stays in the database, and nothing is summarized automatically.
 
-**Storage:** a SQLite file at `~/.local/share/painthaker/history.sqlite3` (or `$XDG_DATA_HOME/painthaker/…`). Set `PAINTHAKER_HISTORY_DB` to use another file. The file is created readable only by you (`0600`), but it is **not encrypted**. Anyone with access to your Linux account can read your chats, including any code or secrets you pasted. Database files are ignored by Git.
+**Storage:** a SQLite file at `~/.local/share/painthaker/history.sqlite3` (or `$XDG_DATA_HOME/painthaker/…`). Set `PAINTHAKER_HISTORY_DB` to use another file. A new file is created readable only by you (`0600`) before anything is written to it, even inside an existing folder. The permissions of an existing database file or folder are never changed. The file is **not encrypted**. Anyone with access to your Linux account can read your chats, including any code or secrets you pasted. Database files are ignored by Git.
 
 **Deletion:** `/delete` removes the conversation and all its messages from the database in one transaction. The deletion is permanent as far as Painthaker is concerned. Painthaker turns on SQLite's `secure_delete` setting, which [overwrites deleted content with zeros](https://www.sqlite.org/pragma.html#pragma_secure_delete) *inside the database file*. This is **not secure erasure**:
 

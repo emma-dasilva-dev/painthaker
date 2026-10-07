@@ -21,10 +21,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _LANGUAGES = ("fr", "en")
 
-_SCHEMA = """
+# Version 2 adds `exchanges`: one row per saved turn, keyed by an ID the chat
+# assigns when the turn completes. The primary key makes saving idempotent: a
+# retry of a turn whose write already committed inserts nothing.
+_EXCHANGES = """
+CREATE TABLE exchanges (
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    turn INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, id),
+    UNIQUE (conversation_id, turn)
+);
+"""
+
+_SCHEMA = (
+    """
 CREATE TABLE conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -41,6 +55,17 @@ CREATE TABLE items (
 );
 CREATE INDEX items_by_turn ON items (conversation_id, turn);
 """
+    + _EXCHANGES
+)
+
+# Version 1 -> 2: existing turns get stable "legacy-<turn>" exchange IDs.
+_MIGRATE_1_TO_2 = (
+    _EXCHANGES
+    + """;
+INSERT INTO exchanges (conversation_id, id, turn)
+    SELECT DISTINCT conversation_id, 'legacy-' || turn, turn FROM items;
+"""
+)
 
 
 class HistoryError(Exception):
@@ -83,8 +108,9 @@ class HistoryStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._lock = threading.Lock()
+        # New folders are private; an existing folder's mode is left alone.
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        is_new = not path.exists()
+        is_new = self._create_private_file(path)
         try:
             self._conn = sqlite3.connect(
                 path, isolation_level=None, check_same_thread=False, timeout=5
@@ -103,8 +129,22 @@ class HistoryStore:
                 f"The history database {path} is unreadable ({exc}). It was left "
                 "unchanged. Move it aside, or set PAINTHAKER_HISTORY_DB to another file."
             ) from exc
-        if is_new:
-            os.chmod(path, 0o600)
+
+    @staticmethod
+    def _create_private_file(path: Path) -> bool:
+        """Create the database file as 0600 before SQLite opens it, so it is
+        never readable by others, whatever the folder or umask. An existing
+        file is left exactly as it is. Returns True if the file was created."""
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return False
+        except OSError as exc:
+            raise HistoryError(
+                f"Can't create the history database {path}: {exc}"
+            ) from exc
+        os.close(fd)
+        return True
 
     def _prepare(self, is_new: bool) -> None:
         conn = self._conn
@@ -123,6 +163,13 @@ class HistoryStore:
                 f"(schema {version}); this version reads schema {SCHEMA_VERSION}. "
                 "It was left unchanged."
             )
+        if version == 1:
+            with self._transaction():
+                for statement in _MIGRATE_1_TO_2.split(";"):
+                    if statement.strip():
+                        conn.execute(statement)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
@@ -156,11 +203,17 @@ class HistoryStore:
         self,
         conversation_id: str,
         *,
+        exchange_id: str,
         title: str,
         language: str,
         items: list[dict[str, Any]],
-    ) -> None:
-        """Save one complete turn; creates the conversation on its first turn."""
+    ) -> bool:
+        """Save one complete turn; creates the conversation on its first turn.
+
+        Idempotent per exchange_id: if that exchange was already saved (for
+        example, the write committed but the caller was cancelled before it
+        learned so), nothing is written and False is returned.
+        """
         if language not in _LANGUAGES:
             raise ValueError(f"unsupported language {language!r}")
         encoded = [json.dumps(item, ensure_ascii=False) for item in items]
@@ -176,6 +229,13 @@ class HistoryStore:
                 " FROM items WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
+            claimed = db.execute(
+                "INSERT OR IGNORE INTO exchanges (conversation_id, id, turn)"
+                " VALUES (?, ?, ?)",
+                (conversation_id, exchange_id, turn),
+            )
+            if claimed.rowcount == 0:
+                return False
             db.executemany(
                 "INSERT INTO items (conversation_id, position, turn, item)"
                 " VALUES (?, ?, ?, ?)",
@@ -188,6 +248,7 @@ class HistoryStore:
                 "UPDATE conversations SET language = ?, updated_at = ? WHERE id = ?",
                 (language, now, conversation_id),
             )
+        return True
 
     def list_conversations(self, limit: int = 20) -> list[ConversationInfo]:
         with self._lock, self._wrap_errors("list conversations"):

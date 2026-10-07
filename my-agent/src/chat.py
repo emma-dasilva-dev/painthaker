@@ -21,6 +21,7 @@ import contextlib
 import logging
 import os
 import signal
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -142,7 +143,9 @@ class ChatApp:
         self.language = "fr"
         # Valid turns the model can see (serialized), and turns not yet on disk.
         self.turns: list[list[dict[str, Any]]] = []
-        self.unsaved: list[tuple[list[dict[str, Any]], str]] = []
+        # Pending saves: (exchange id, items, language). The ID is fixed when the
+        # turn completes, so a retry after an interrupted save is a no-op.
+        self.unsaved: list[tuple[str, list[dict[str, Any]], str]] = []
         # Saved turns of a resumed conversation that weren't loaded at all.
         self.unloaded_turns = 0
 
@@ -310,7 +313,7 @@ class ChatApp:
             [text_of(item) for item in turn if item.get("role") == "user"],
             initial=self.language,
         )
-        self.unsaved.append((turn, self.language))
+        self.unsaved.append((uuid.uuid4().hex, turn, self.language))
         await self._save_unsaved()
 
     async def _discard_turn(self, reason: str) -> None:
@@ -324,11 +327,12 @@ class ChatApp:
 
     async def _save_unsaved(self) -> None:
         while self.unsaved and self.conversation_id is not None:
-            turn, language = self.unsaved[0]
+            exchange_id, turn, language = self.unsaved[0]
             try:
                 await asyncio.to_thread(
                     self.store.append_turn,
                     self.conversation_id,
+                    exchange_id=exchange_id,
                     title=self.title or "Conversation",
                     language=language,
                     items=turn,
