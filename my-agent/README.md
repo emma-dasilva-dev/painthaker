@@ -96,8 +96,39 @@ The script selects the Linux environment itself, so you don't need any exports. 
 | Ctrl+V or Ctrl+Shift+V (VS Code on Windows, including WSL terminals) | Paste into the input. Nothing is sent yet, and newlines and indentation are kept |
 | Enter | Send the whole input as one message |
 | Alt+Enter (or Ctrl+J) | New line while typing |
-| Ctrl+C | Clear the current input |
-| Ctrl+D | Quit |
+| Ctrl+C | Clear the current input, or interrupt a reply in progress (that turn isn't saved) |
+| Ctrl+D | Quit (pending turns are saved first) |
+
+### Conversation history
+
+Each start opens a **new** conversation; an old one is never loaded automatically. The start-up line shows the most recent conversation and the command to resume it.
+
+| Command | Action |
+|---|---|
+| `/new` | Start a new conversation |
+| `/list` | Saved conversations: short ID, last update, number of exchanges, title |
+| `/resume <id>` | Resume a conversation. Use the ID from `/list` (at least 4 characters). The last two exchanges are shown |
+| `/delete <id>` | Delete a conversation permanently, after you type `oui` to confirm. Anything else cancels |
+| `/help` | Show the commands and keys |
+
+Commands are handled locally and never sent to the model. A line counts as a command only if it is exactly one of these. Multiline text and things like `/etc/passwd …` are sent as normal messages.
+
+How saving works:
+
+- A conversation is saved after its first completed exchange. Each later exchange (your message, any tool calls with their results, and the reply) is saved as one unit.
+- A reply that fails or that you interrupt with Ctrl+C is **not** saved. It is also removed from what the model sees, so you can simply resend the message.
+- If saving fails, Painthaker says so in red. It retries on your next message and when you quit, and never claims a turn was saved when it wasn't.
+- The title comes from your first message, generated locally with no model call.
+- A resumed conversation keeps its language (French or English). It uses the current instructions and today's date, so dates are never replayed from the past.
+- Instructions, the date note and API keys are never stored.
+
+**Context limit:** the model sees the current instructions plus the **20 most recent exchanges**. Older exchanges are dropped as whole exchanges, so a tool call is never separated from its result. The full transcript stays in the database. Nothing is summarized automatically.
+
+**Storage:** a SQLite file at `~/.local/share/painthaker/history.sqlite3` (or `$XDG_DATA_HOME/painthaker/…`). Set `PAINTHAKER_HISTORY_DB` to use another file. The file is created readable only by you (`0600`), but it is **not encrypted**. Anyone with access to your Linux account can read your chats, including any code or secrets you pasted. Database files are ignored by Git.
+
+**Deletion:** `/delete` removes the conversation and all its messages in one transaction, with SQLite's `secure_delete` enabled so the content is overwritten in the file. Copies made elsewhere (backups, a copied file) are not affected. To erase everything, quit Painthaker and delete the file.
+
+If the database can't be read (corrupt, not a Painthaker file, or written by a newer version), Painthaker stops with an explanation and leaves the file untouched. It never replaces or deletes it. Move the file aside, or point `PAINTHAKER_HISTORY_DB` elsewhere.
 
 ### First-time setup, or after `uv.lock` changes
 
@@ -120,7 +151,7 @@ export UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker"
 export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT" PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 
 uv run --no-sync ruff format && uv run --no-sync ruff check
-uv run --no-sync pytest tests/test_language.py tests/test_date_context.py tests/test_response_checks.py tests/test_chat_input.py   # offline
+uv run --no-sync pytest --ignore=tests/test_agent.py --ignore=tests/test_response_quality.py   # offline, no LLM calls
 uv run --no-sync pytest tests/test_agent.py              # live: calls Gemini
 uv run --no-sync pytest tests/test_response_quality.py   # live: run separately
 # The Gemini free tier allows 15 requests/min, so wait ~1 min between live runs.

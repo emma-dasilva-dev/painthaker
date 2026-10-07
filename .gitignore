@@ -24,6 +24,13 @@ dist/
 .coverage
 htmlcov/
 
+# Local databases (chat history lives outside the repo, but an override could point here)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
 # Logs and generated artifacts
 *.log
 logs/

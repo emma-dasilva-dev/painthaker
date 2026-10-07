@@ -1,0 +1,272 @@
+# Offline end-to-end tests of the chat's history behavior: ChatApp drives the
+# real AgentSession and Painthaker agent, with a scripted LLM instead of Gemini.
+
+import asyncio
+import io
+import os
+import signal
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+from livekit.agents import llm
+from rich.console import Console
+from scripted_llm import Hang, ScriptedFailureError, ScriptedLLM, ToolCall
+
+from agent import Painthaker
+from chat import ChatApp
+from history import HistoryStore
+
+CODE = "import os\n\ndef run(cmd):\n    os.system(cmd)  # indentation kept\n"
+CLOCK = datetime(2026, 10, 7, 9, 30, tzinfo=ZoneInfo("Africa/Porto-Novo"))
+
+
+class Harness:
+    def __init__(self, db: Path, steps: list, answers: list[str] | None = None) -> None:
+        self.llm = ScriptedLLM(steps)
+        self.answers = list(answers or [])
+        self.questions: list[str] = []
+        self.output = io.StringIO()
+        self.clock: Callable[[], datetime] = lambda: CLOCK
+        self.store = HistoryStore(db)
+        self.app = ChatApp(
+            self.store,
+            Console(file=self.output, width=120, color_system=None),
+            self._confirm,
+            agent_factory=lambda **kw: Painthaker(self.clock, model=self.llm, **kw),
+        )
+
+    async def _confirm(self, question: str) -> str:
+        self.questions.append(question)
+        return self.answers.pop(0)
+
+    def printed(self) -> str:
+        return self.output.getvalue()
+
+    def agent_items(self) -> list[llm.ChatItem]:
+        return [
+            item
+            for item in self.app.agent.chat_ctx.items
+            if not (item.type == "message" and item.role == "system")
+            and item.type != "agent_config_update"
+        ]
+
+    async def close(self) -> None:
+        await self.app.close()
+        self.store.close()
+
+
+@pytest.fixture(autouse=True)
+def _api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "offline-test-key")
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> Path:
+    return tmp_path / "history.sqlite3"
+
+
+def _texts(items: list) -> list[tuple[str, str]]:
+    out = []
+    for item in items:
+        kind = item["type"] if isinstance(item, dict) else item.type
+        if kind == "message":
+            role = item["role"] if isinstance(item, dict) else item.role
+            content = item["content"] if isinstance(item, dict) else item.content
+            out.append((role, "".join(c for c in content if isinstance(c, str))))
+        else:
+            out.append((kind, ""))
+    return out
+
+
+async def test_resume_after_restart_restores_context_language_and_fresh_date(
+    db: Path,
+) -> None:
+    first = Harness(db, ["Noted.", "Sure, Falcon-7."])
+    await first.app.start()
+    assert "nouvelle conversation" in first.printed()
+    await first.app.handle_input(
+        "Can we continue in English please? My test robot is Rivet."
+    )
+    await first.app.handle_input("ok, and the code word is Falcon-7")
+    conversation_id = first.app.conversation_id
+    await first.close()
+
+    second = Harness(db, ["Your robot is Rivet."])
+    second.clock = lambda: datetime(
+        2026, 10, 8, 0, 5, tzinfo=ZoneInfo("Africa/Porto-Novo")
+    )
+    await second.app.start()
+    assert "Dernière conversation" in second.printed()
+    await second.app.handle_input("/resume " + conversation_id[:8])
+    assert "Reprise de" in second.printed() and "Falcon-7" in second.printed()
+    assert second.app.language == "en"
+
+    await second.app.handle_input("ok")  # no language cue: the saved English must hold
+    sent = second.llm.requests[-1]
+    system = "\n".join(
+        item.text_content or ""
+        for item in sent.items
+        if item.type == "message" and item.role == "system"
+    )
+    assert "Reply language for this turn: English" in system
+    assert "Thursday 8 October 2026, 00:05" in system  # fresh clock, not the saved one
+    assert "Painthaker" in system  # current instructions applied
+    assert (
+        "user",
+        "Can we continue in English please? My test robot is Rivet.",
+    ) in _texts(sent.items)
+    await second.close()
+
+    stored = HistoryStore(db).load_items(conversation_id)
+    assert [role for role, _ in _texts(stored)].count(
+        "system"
+    ) == 0  # no prompts or date notes saved
+    assert len([i for i in stored if i.get("role") == "user"]) == 3
+
+
+async def test_tool_turn_is_saved_with_matching_call_and_output(db: Path) -> None:
+    h = Harness(
+        db,
+        [
+            ToolCall(
+                "inspect_code", '{"code": "eval(x)", "language": "python"}', "call-1"
+            ),
+            "Pattern detected.",
+        ],
+    )
+    await h.app.start()
+    await h.app.handle_input("Review:\n```python\n" + CODE + "```")
+    stored = h.store.load_items(h.app.conversation_id)
+    kinds = [item["type"] for item in stored]
+    assert kinds == ["message", "function_call", "function_call_output", "message"]
+    assert stored[1]["call_id"] == stored[2]["call_id"] == "call-1"
+    assert CODE in stored[0]["content"][0]  # multiline code and indentation intact
+    assert "tool: inspect_code" in h.printed()
+    await h.close()
+
+
+async def test_failed_turn_is_not_saved_and_leaves_no_trace_in_context(
+    db: Path,
+) -> None:
+    h = Harness(
+        db, ["First answer.", ScriptedFailureError("network down"), "Second answer."]
+    )
+    await h.app.start()
+    await h.app.handle_input("Première question")
+    await h.app.handle_input("Question qui échoue")
+    assert "pas été enregistré" in h.printed()
+    assert [t for _, t in _texts(h.agent_items())] == [
+        "Première question",
+        "First answer.",
+    ]
+
+    await h.app.handle_input("Deuxième question")
+    stored = h.store.load_items(h.app.conversation_id)
+    assert [t for _, t in _texts(stored)] == [
+        "Première question",
+        "First answer.",
+        "Deuxième question",
+        "Second answer.",
+    ]
+    sent_users = [t for r, t in _texts(h.llm.requests[-1].items) if r == "user"]
+    assert "Question qui échoue" not in sent_users
+    await h.close()
+
+
+async def test_tool_call_without_a_final_answer_is_discarded(db: Path) -> None:
+    # The model asks for a tool, the tool runs, then the follow-up call fails:
+    # the call/output pair must not be saved without a reply.
+    h = Harness(
+        db,
+        [
+            ToolCall("inspect_code", '{"code": "x", "language": "python"}', "c9"),
+            ScriptedFailureError("timeout"),
+        ],
+    )
+    await h.app.start()
+    await h.app.handle_input("Vérifie ce code : x")
+    assert h.app.conversation_id is None
+    assert h.store.list_conversations() == []
+    assert h.agent_items() == []
+    await h.close()
+
+
+async def test_first_turn_creates_the_record_and_commands_never_reach_the_model(
+    db: Path,
+) -> None:
+    h = Harness(db, ["Réponse."])
+    await h.app.start()
+    for command in ("/help", "/list", "/new", "/frobnicate"):
+        await h.app.handle_input(command)
+    assert h.llm.requests == []
+    assert h.store.list_conversations() == []
+    assert "Commande inconnue" in h.printed() and "/resume <id>" in h.printed()
+
+    await h.app.handle_input("Bonjour, qu'est-ce qu'un CVE ?")
+    [info] = h.store.list_conversations()
+    assert info.title == "Bonjour, qu'est-ce qu'un CVE ?"
+    assert len(h.llm.requests) == 1
+    await h.close()
+
+
+async def test_delete_requires_confirmation(db: Path) -> None:
+    h = Harness(db, ["A.", "B."], answers=["non", "oui"])
+    await h.app.start()
+    await h.app.handle_input("Première conversation")
+    keep_id = h.app.conversation_id
+    await h.app.handle_input("/new")
+    await h.app.handle_input("Seconde conversation")
+    current_id = h.app.conversation_id
+
+    await h.app.handle_input("/delete " + current_id[:8])
+    assert "Suppression annulée" in h.printed()
+    assert len(h.store.list_conversations()) == 2
+
+    await h.app.handle_input("/delete " + current_id[:8])
+    assert "supprimée" in h.printed()
+    assert [i.id for i in h.store.list_conversations()] == [keep_id]
+    assert (
+        h.app.conversation_id is None
+    )  # deleting the open conversation starts a new one
+    assert all("Supprimer définitivement" in q for q in h.questions)
+    await h.close()
+
+
+async def test_resume_limits_model_context_to_recent_complete_turns(db: Path) -> None:
+    h = Harness(db, [f"a{n}" for n in range(1, 5)] + ["fin"])
+    h.app.max_turns = 2
+    await h.app.start()
+    for n in range(1, 5):
+        await h.app.handle_input(f"q{n}")
+    cid = h.app.conversation_id
+    await h.app.handle_input("/new")
+    await h.app.handle_input("/resume " + cid[:8])
+    assert [t for _, t in _texts(h.agent_items())] == ["q3", "a3", "q4", "a4"]
+    assert "derniers échanges" in h.printed()
+    assert len(h.store.load_items(cid)) == 8  # the full transcript stays on disk
+    await h.close()
+
+
+async def test_ctrl_c_during_a_reply_interrupts_without_saving(db: Path) -> None:
+    h = Harness(db, [Hang(), "After the interruption."])
+    await h.app.start()
+    turn = asyncio.ensure_future(h.app.handle_input("Une question très longue"))
+    while not h.llm.requests:  # wait until the model call is in flight
+        await asyncio.sleep(0.01)
+    os.kill(os.getpid(), signal.SIGINT)  # what Ctrl+C sends
+    await asyncio.wait_for(turn, timeout=10)
+
+    assert "Réponse interrompue" in h.printed()
+    assert h.store.list_conversations() == []
+    assert h.agent_items() == []
+
+    await h.app.handle_input("Nouvelle tentative")
+    stored = h.store.load_items(h.app.conversation_id)
+    assert [t for _, t in _texts(stored)] == [
+        "Nouvelle tentative",
+        "After the interruption.",
+    ]
+    await h.close()

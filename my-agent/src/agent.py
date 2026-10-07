@@ -27,6 +27,8 @@ from livekit.agents import (
 )
 from livekit.plugins import ai_coustics, google
 
+from conversation import recent_context
+
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
@@ -165,8 +167,10 @@ def detect_language(message: str) -> str | None:
     return None
 
 
-def reply_language(user_messages: list[str]) -> str:
-    language = "fr"
+def reply_language(user_messages: list[str], initial: str = "fr") -> str:
+    """The language after these messages, starting from `initial` (a resumed
+    conversation's saved language, else French)."""
+    language = initial
     for message in user_messages:
         language = detect_language(message) or language
     return language
@@ -371,17 +375,29 @@ _SECURITY_RULES: list[dict[str, Any]] = [
 
 
 class Painthaker(Agent):
-    def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], datetime] | None = None,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        language: str = "fr",
+        model: llm.LLM | None = None,
+    ) -> None:
         # `clock` returns the current timezone-aware datetime; tests pass a fake one.
         self._clock = clock or partial(datetime.now, app_timezone())
+        # A resumed conversation passes its saved items and language; the
+        # framework adds the current instructions in front of chat_ctx.
+        self._initial_language = language
         super().__init__(
+            chat_ctx=chat_ctx,
             # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
             # Connects directly to the Gemini API with your own key (GOOGLE_API_KEY in
             # .env.local) instead of going through LiveKit Inference. gemini-3.5-flash-lite
             # is used here (instead of gemini-3.8-flash) to avoid that model's 503/504
             # high-demand errors; it's free-tier eligible and well suited for development.
             # See https://docs.livekit.io/agents/models/llm/gemini/
-            llm=google.LLM(model="gemini-3.5-flash-lite"),
+            # `model` replaces it in tests.
+            llm=model or google.LLM(model="gemini-3.5-flash-lite"),
             # To use a realtime model instead of a voice pipeline, replace the LLM
             # with a realtime model and remove the STT/TTS from the AgentSession
             # (Note: This is for OpenAI GPT-Live, the recommended speech-to-speech
@@ -546,17 +562,22 @@ class Painthaker(Agent):
             ),
         )
 
-    def turn_context(self, chat_ctx: llm.ChatContext) -> llm.ChatContext:
-        """A copy of chat_ctx with this call's language and current-date notes."""
+    def conversation_language(self, items: list[llm.ChatItem]) -> str:
+        """The reply language after these items, from this agent's starting language."""
         user_messages = [
             item.text_content or ""
-            for item in chat_ctx.items
+            for item in items
             if item.type == "message" and item.role == "user"
         ]
-        chat_ctx = chat_ctx.copy()
-        chat_ctx.add_message(
-            role="system", content=_LANGUAGE_NOTES[reply_language(user_messages)]
-        )
+        return reply_language(user_messages, initial=self._initial_language)
+
+    def turn_context(self, chat_ctx: llm.ChatContext) -> llm.ChatContext:
+        """What the LLM sees on this call: the instructions and the most recent
+        complete turns (see conversation.MAX_CONTEXT_TURNS), then the language
+        and current-date notes. Nothing here is written back to the history."""
+        language = self.conversation_language(chat_ctx.items)
+        chat_ctx = llm.ChatContext(recent_context(chat_ctx.items))
+        chat_ctx.add_message(role="system", content=_LANGUAGE_NOTES[language])
         chat_ctx.add_message(role="system", content=date_note(self._clock()))
         return chat_ctx
 
