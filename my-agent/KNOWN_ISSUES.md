@@ -45,4 +45,4 @@ Still to watch:
 ## Testing
 
 - **Simulations haven't been run yet.** `lk agent simulate text --scenarios scenarios.yaml` uses LiveKit Cloud simulation usage. With Gemini's free tier (15 requests/min for `gemini-3.5-flash-lite`), parallel scenarios are likely to fail with 429 errors.
-- **The CI workflows don't run yet.** They live in `my-agent/.github/workflows/`, but GitHub only runs workflows from the repository root's `.github/workflows/`. The simulations workflow would also need a `GOOGLE_API_KEY` repository secret.
+- **CI runs offline checks only.** The root workflow `.github/workflows/ci.yml` runs formatting, lint and the offline tests with no secrets. The starter's workflows in `my-agent/.github/workflows/` (ruff, simulations, template checks, version tagging) are intentionally inactive: GitHub only runs workflows from the repository root. Live tests and simulations stay manual because they need API keys and use quota.

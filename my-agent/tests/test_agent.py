@@ -1,6 +1,6 @@
 # Turn-level checks for Painthaker's text-chat behavior. They run the agent
 # in-process against its real LLM (Gemini, using GOOGLE_API_KEY from .env.local)
-# without a LiveKit room, so `uv run pytest` costs only a few LLM calls. Whole
+# without a LiveKit room. Live: run with `pytest -m live tests/test_agent.py`. Whole
 # conversations are covered by the simulations in scenarios.yaml.
 #
 # LLM output is non-deterministic: a pass shows the behavior is likely, not
@@ -11,6 +11,8 @@ from livekit.agents import AgentSession, llm
 from livekit.plugins import google
 
 from agent import Painthaker
+
+pytestmark = pytest.mark.live
 
 
 def _judge_llm() -> llm.LLM:

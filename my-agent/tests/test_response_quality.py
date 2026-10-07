@@ -4,7 +4,7 @@
 # so they test the rule rather than one memorized answer.
 #
 # Gemini's free tier allows 15 requests/min; run this file on its own, e.g.
-#   uv run --no-sync pytest tests/test_response_quality.py
+#   uv run --no-sync pytest -m live tests/test_response_quality.py
 # and wait about a minute before the next live run.
 
 import re
@@ -23,6 +23,8 @@ from response_checks import (
 
 from agent import Painthaker, app_timezone
 from chat import TERMINAL_CHAT_NOTE
+
+pytestmark = pytest.mark.live
 
 
 def _judge_llm() -> llm.LLM:

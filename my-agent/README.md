@@ -86,7 +86,7 @@ Linux uses its own environment outside the repository, `~/.virtualenvs/painthake
 From any directory, in any new terminal:
 
 ```console
-/mnt/c/Users/HP/Documents/Development/painthaker/my-agent/scripts/chat.sh
+path/to/painthaker/my-agent/scripts/chat.sh
 ```
 
 The script selects the Linux environment itself, so you don't need any exports. It checks that the environment matches `uv.lock` without installing anything, then starts `src/chat.py`. It stops with the exact setup command if the environment is missing or out of date. To use another environment, set `PAINTHAKER_VENV`.
@@ -147,11 +147,11 @@ If the database can't be read (corrupt, not a Painthaker file, or written by a n
 ### First-time setup, or after `uv.lock` changes
 
 ```console
-cd /mnt/c/Users/HP/Documents/Development/painthaker/my-agent
+cd path/to/painthaker/my-agent
 UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker" uv sync --locked --python 3.11
 ```
 
-`.env.local` must define `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. It is ignored by Git; never commit it.
+`.env.local` holds `GOOGLE_API_KEY`, needed for every model reply, and `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` for LiveKit CLI and Cloud features. It is ignored by Git; never commit it. The offline tests and CI need none of these.
 
 Painthaker reads the current date and time from the machine's clock in your timezone. The default is `Africa/Porto-Novo`; to use another, set `PAINTHAKER_TIMEZONE` to an IANA name such as `Europe/Paris`.
 
@@ -160,14 +160,14 @@ Painthaker reads the current date and time from the machine's clock in your time
 These commands need the Linux environment selected in the current shell first:
 
 ```console
-cd /mnt/c/Users/HP/Documents/Development/painthaker/my-agent
+cd path/to/painthaker/my-agent
 export UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker"
 export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT" PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 
 uv run --no-sync ruff format && uv run --no-sync ruff check
-uv run --no-sync pytest --ignore=tests/test_agent.py --ignore=tests/test_response_quality.py   # offline, no LLM calls
-uv run --no-sync pytest tests/test_agent.py              # live: calls Gemini
-uv run --no-sync pytest tests/test_response_quality.py   # live: run separately
+uv run --no-sync pytest                                          # offline only (live tests deselected)
+uv run --no-sync pytest -m live tests/test_agent.py              # live: calls Gemini
+uv run --no-sync pytest -m live tests/test_response_quality.py   # live: run separately
 # The Gemini free tier allows 15 requests/min, so wait ~1 min between live runs.
 
 lk agent debugger start                      # drive the agent turn by turn

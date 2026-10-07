@@ -1,0 +1,52 @@
+# Offline checks for my-agent: formatting, lint and the offline test suite.
+# No secrets are provided and none are needed: plain `pytest` deselects tests
+# marked `live` (see my-agent/pyproject.toml), and the offline tests use a
+# scripted LLM, so this workflow makes no model or LiveKit Cloud calls.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: my-agent
+    env:
+      # Make sure nothing can reach a real provider, even by accident.
+      GOOGLE_API_KEY: ""
+      LIVEKIT_URL: ""
+      LIVEKIT_API_KEY: ""
+      LIVEKIT_API_SECRET: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.21"
+          working-directory: my-agent
+
+      - name: Install locked dependencies (Python 3.11)
+        run: uv sync --locked --python 3.11
+
+      - name: Check formatting
+        run: uv run --no-sync ruff format --check
+
+      - name: Lint
+        run: uv run --no-sync ruff check
+
+      - name: Offline tests (live tests are deselected)
+        run: uv run --no-sync pytest -v
