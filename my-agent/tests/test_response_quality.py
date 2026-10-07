@@ -203,8 +203,9 @@ _REVIEW = (
 )
 _FOLLOW_UP = "Et dans la fonction que tu as vérifiée, quel argument faut-il retirer ?"
 _ASKS_TO_PASTE = (
-    "Written in French. Says it doesn't have (or didn't receive) the code the user "
-    "refers to, and asks the user to paste or send it again. It does not describe, "
+    "Written in French. Says it doesn't have the code the user refers to in the "
+    "current context (or can't see it), "
+    "and asks the user to paste or send it again. It does not describe, "
     "quote or review that code, and does not name a specific argument of that "
     "function as the answer."
 )

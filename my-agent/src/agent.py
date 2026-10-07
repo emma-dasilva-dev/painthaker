@@ -214,9 +214,10 @@ def app_timezone() -> ZoneInfo:
 # context; code knows exactly when exchanges were left out or a message failed,
 # so it says so on every LLM call instead of letting the model guess.
 MISSED_TURN_NOTE = (
-    "Context note: the user's previous message failed or was interrupted before "
-    "you answered it, so you never received it (including any code it contained). "
-    "If the user refers to it, say you didn't receive it and ask them to send it again."
+    "Context note: the user's previous exchange failed or was interrupted before "
+    "an answer was completed, so it is not included in your current context "
+    "(including any code it contained). If the user refers to it, say it isn't in "
+    "your current context and ask them to send it again."
 )
 
 
@@ -517,7 +518,7 @@ class Painthaker(Agent):
 
                 - Only the messages in this conversation are available to you. A system
                   note may say that earlier exchanges are hidden, or that the user's
-                  last message never reached you.
+                  last exchange failed and isn't included in your context.
                 - When the user refers to code, a message or a review you can't find in
                   the conversation ("the function you checked", "my code above"), say
                   plainly that you don't have it here and ask them to paste it again.

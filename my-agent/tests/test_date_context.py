@@ -97,4 +97,5 @@ def test_context_notes_only_when_something_is_missing() -> None:
         Painthaker(clock=clock, hidden_turns=3, missed_user_turn=True), "Bonjour"
     )
     assert "3 earlier exchange(s)" in notes
-    assert "never received it" in notes
+    assert "not included in your current context" in notes
+    assert "never received" not in notes  # a provider may have received the request

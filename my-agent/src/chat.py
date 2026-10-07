@@ -283,7 +283,7 @@ class ChatApp:
         await self._save_unsaved()
 
     async def _discard_turn(self, reason: str) -> None:
-        """Drop everything the failed turn added, so the model never sees it."""
+        """Drop everything the failed turn added from the context the model gets."""
         self.console.print(
             f"{reason}. Ce tour n'a pas été enregistré ; vous pouvez renvoyer le message.",
             style="red",

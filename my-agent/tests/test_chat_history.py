@@ -422,7 +422,7 @@ def _user_texts(request: llm.ChatContext) -> list[str]:
     return [t for r, t in _texts(request.items) if r == "user"]
 
 
-async def test_failed_review_then_follow_up_tells_the_model_the_code_never_arrived(
+async def test_failed_review_then_follow_up_says_the_code_is_not_in_context(
     db: Path,
 ) -> None:
     h = Harness(db, [ScriptedFailureError("504"), "Je n'ai pas reçu ce code.", "Ok."])
