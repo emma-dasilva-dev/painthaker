@@ -94,13 +94,29 @@ To make `lk` start the agent with that environment, put it on `PATH` in the same
 ```console
 export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT" PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 
-lk agent console --text                      # chat with Painthaker in the terminal
+lk agent console --text                      # chat with Painthaker in the terminal (no pasting, see below)
 lk agent debugger start                      # or drive it turn by turn
 lk agent debugger say "Bonjour !"
 lk agent debugger stop
 ```
 
 These variables only last for the current shell. Run the exports in every new terminal.
+
+### Pasting messages and code
+
+`lk agent console` 2.18.8 drops pasted text, and its input is a single line capped at 1000 characters. To paste messages or multiline code, use the project's own text chat. It runs the same agent locally in text mode:
+
+```console
+uv run --no-sync python src/chat.py
+```
+
+| Key | Action |
+|---|---|
+| Ctrl+V or Ctrl+Shift+V (VS Code on Windows, including WSL terminals) | Paste into the input. Nothing is sent yet, and newlines and indentation are kept |
+| Enter | Send the whole input as one message |
+| Alt+Enter (or Ctrl+J) | New line while typing |
+| Ctrl+C | Clear the current input |
+| Ctrl+D | Quit |
 
 Checks:
 

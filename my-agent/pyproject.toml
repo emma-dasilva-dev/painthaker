@@ -17,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "prompt-toolkit>=3.0",
     "pytest",
     "pytest-asyncio",
     "ruff",

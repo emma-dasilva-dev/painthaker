@@ -13,6 +13,7 @@ Observed but not fixed yet. For each behavior issue, add a scenario to `scenario
 
 - **`agent_name` deprecation warning at startup:** "agent_name is set in code; move it to livekit.toml ([agent] name). The agent_name parameter will be removed in a future release." It comes from `@server.rtc_session(agent_name="my-agent")` in `src/agent.py`.
 - **Event-loop stall warnings at startup.** For example, "event loop blocked for 170ms importing unittest.mock" and "314ms importing anyio._backends._asyncio". The warning suggests importing these modules during process prewarm.
+- **`lk agent console --text` can't take pastes.** In lk 2.18.8, the console's `Update` handles key events only. Bracketed pastes (`tea.PasteMsg`) are dropped, and the single-line input would turn newlines into spaces and cut text at 1000 characters anyway. Work around it with `src/chat.py` (see README). Reported to LiveKit through `lk docs submit-feedback`.
 - **Native Windows crash.** `lk agent console --text` exits with `0xc0000005` ("Agent exited with no output"). Not diagnosed; use Ubuntu WSL (see README).
 
 ## Testing
