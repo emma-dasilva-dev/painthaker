@@ -19,6 +19,7 @@ Start it with scripts/chat.sh (Ubuntu/WSL).
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -494,6 +495,17 @@ def _local_time(info: ConversationInfo) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.ERROR)
     console = Console()
+    # Checked before anything else (no database is created): without a key the
+    # Gemini client would fail at startup with a traceback.
+    if not os.environ.get("GOOGLE_API_KEY", "").strip():
+        console.print(
+            "GOOGLE_API_KEY manquante. Ajoutez la ligne GOOGLE_API_KEY=<votre clé> "
+            "dans my-agent/.env.local (voir README, section Credentials), puis "
+            "relancez.",
+            style="bold red",
+            markup=False,
+        )
+        raise SystemExit(1)
     try:
         max_chars = context_char_budget()
     except ValueError as exc:
