@@ -1,0 +1,6 @@
+Serveur de sauvegarde
+Nom : kapok
+Système : Debian 13
+
+Les sauvegardes nocturnes démarrent à 02:30
+et sont vérifiées chaque lundi par Aïcha.

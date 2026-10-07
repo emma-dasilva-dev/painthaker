@@ -564,3 +564,53 @@ async def test_retry_after_an_interrupted_save_acknowledgement_adds_no_duplicate
     assert [t for _, t in _texts(stored)] == ["Question unique", "Réponse."]
     assert h.app.unsaved == []
     h.store.close()
+
+
+async def test_search_notes_tool_runs_and_its_sources_are_saved(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notes_dir = Path(__file__).parent / "fixtures" / "notes"
+    monkeypatch.setenv("PAINTHAKER_NOTES_DIR", str(notes_dir))
+    h = Harness(
+        db,
+        [
+            ToolCall("search_notes", '{"query": "canal Wi-Fi routeur Baobab"}', "n1"),
+            "D'après tes notes, le canal est 11 (reseau.md:1-8).",
+        ],
+    )
+    await h.app.start()
+    assert "search_notes" in {tool.info.name for tool in h.app.agent.tools}
+    await h.app.handle_input("D'après mes notes, quel canal Wi-Fi utilise le routeur ?")
+
+    stored = h.store.load_items(h.app.conversation_id)
+    [output] = [i for i in stored if i["type"] == "function_call_output"]
+    assert output["call_id"] == "n1" and not output["is_error"]
+    assert "'status': 'ok'" in output["output"]
+    assert "'source': 'reseau.md:" in output["output"]
+    assert "Le routeur principal utilise le canal Wi-Fi 11." in output["output"]
+    assert "canal 6" not in output["output"]  # hidden draft never read
+    assert "tool: search_notes" in h.printed()
+    await h.close()
+
+
+async def test_search_notes_without_a_folder_explains_how_to_enable_it(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PAINTHAKER_NOTES_DIR", raising=False)
+    h = Harness(
+        db,
+        [
+            ToolCall("search_notes", '{"query": "routeur"}', "n2"),
+            "La recherche dans les notes n'est pas activée.",
+        ],
+    )
+    await h.app.start()
+    await h.app.handle_input("Cherche dans mes notes : routeur")
+    [output] = [
+        i
+        for i in h.store.load_items(h.app.conversation_id)
+        if i["type"] == "function_call_output"
+    ]
+    assert "not_configured" in output["output"]
+    assert "PAINTHAKER_NOTES_DIR" in output["output"]
+    await h.close()
