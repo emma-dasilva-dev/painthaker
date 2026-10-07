@@ -13,6 +13,7 @@ dependencies = [
     "livekit-plugins-ai-coustics~=0.3",
     "livekit-plugins-google~=1.8",
     "python-dotenv",
+    "tzdata>=2026.5",
 ]
 
 [dependency-groups]

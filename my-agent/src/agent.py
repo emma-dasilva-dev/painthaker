@@ -1,8 +1,12 @@
 import logging
+import os
 import re
 import textwrap
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
+from datetime import datetime
+from functools import partial
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -168,6 +172,56 @@ def reply_language(user_messages: list[str]) -> str:
     return language
 
 
+# Current date. The LLM otherwise guesses the date from its training data, so
+# the application clock is read on every LLM call (see Painthaker.turn_context),
+# which also keeps it right in a session that crosses midnight.
+DEFAULT_TIMEZONE = "Africa/Porto-Novo"
+_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+_MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def app_timezone() -> ZoneInfo:
+    """The user's timezone: PAINTHAKER_TIMEZONE (an IANA name), else the default."""
+    return ZoneInfo(os.environ.get("PAINTHAKER_TIMEZONE") or DEFAULT_TIMEZONE)
+
+
+def date_note(now: datetime) -> str:
+    offset = now.utcoffset()
+    if offset is None:
+        raise ValueError("the clock must return a timezone-aware datetime")
+    minutes = int(offset.total_seconds()) // 60
+    sign = "+" if minutes >= 0 else "-"
+    utc = f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+    return (
+        "Current date and time from the application clock: "
+        f"{_WEEKDAYS[now.weekday()]} {now.day} {_MONTHS[now.month - 1]} {now.year}, "
+        f"{now:%H:%M} ({now.tzinfo}, {utc}); ISO date {now.date().isoformat()}. "
+        "Use it for questions about today's date, day, time or year. It tells you "
+        "nothing about current events."
+    )
+
+
 # Simple, deterministic pattern checks used by the `inspect_code` tool below.
 # `languages` is the set of `language` values a rule applies to, or None to
 # apply regardless of language. `match_type` distinguishes a precise syntactic
@@ -317,7 +371,9 @@ _SECURITY_RULES: list[dict[str, Any]] = [
 
 
 class Painthaker(Agent):
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
+        # `clock` returns the current timezone-aware datetime; tests pass a fake one.
+        self._clock = clock or partial(datetime.now, app_timezone())
         super().__init__(
             # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
             # Connects directly to the Gemini API with your own key (GOOGLE_API_KEY in
@@ -361,9 +417,10 @@ class Painthaker(Agent):
                   before moving to the next idea.
                 - Answer directly, starting with the answer itself. A simple or
                   definitional question gets a short answer (a few sentences or a short
-                  list, roughly 120 words), then an offer to go deeper. Expand only when
-                  the user asks or the task needs it. No praise or filler such as
-                  "Excellente question" or restating the question.
+                  list, roughly 120 words); for a learning topic you may end with a
+                  brief offer to go deeper. Expand only when the user asks or the task
+                  needs it. No praise or filler such as "Excellente question" or
+                  restating the question.
 
                 # Accuracy
 
@@ -391,9 +448,22 @@ class Painthaker(Agent):
                 # Subject focus
 
                 - Your focus is cybersecurity, secure software development, Linux,
-                  networking, code review, and related technical learning topics. For
-                  unrelated requests, answer briefly if you can and steer the conversation
-                  back toward a security or development lesson.
+                  networking, code review, and related technical learning topics.
+                - Ordinary conversational questions (the date, small talk, a quick
+                  general question) get a simple, direct answer, usually one sentence.
+                  Don't steer them back to security or offer a lesson.
+
+                # Current date
+
+                - Each turn, a system note gives the current date and time from the
+                  application clock, in the user's timezone. Use it for any question
+                  about today's date, day, time or year, and when you need "now" (for
+                  example, how old something is). Never guess the date from your
+                  training data.
+                - Knowing today's date doesn't mean you know current events. Your
+                  knowledge comes from training data with a cutoff; for news, recent
+                  releases or new vulnerabilities, say you may not know about them and
+                  suggest checking a current source.
 
                 # Reviewing code
 
@@ -476,13 +546,8 @@ class Painthaker(Agent):
             ),
         )
 
-    async def llm_node(
-        self,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk | str]:
-        # Runs for every LLM call, including the one after a tool result.
+    def turn_context(self, chat_ctx: llm.ChatContext) -> llm.ChatContext:
+        """A copy of chat_ctx with this call's language and current-date notes."""
         user_messages = [
             item.text_content or ""
             for item in chat_ctx.items
@@ -492,8 +557,19 @@ class Painthaker(Agent):
         chat_ctx.add_message(
             role="system", content=_LANGUAGE_NOTES[reply_language(user_messages)]
         )
+        chat_ctx.add_message(role="system", content=date_note(self._clock()))
+        return chat_ctx
+
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterable[llm.ChatChunk | str]:
+        # Runs for every LLM call, including the one after a tool result, so the
+        # date is read fresh each time.
         async for chunk in Agent.default.llm_node(
-            self, chat_ctx, tools, model_settings
+            self, self.turn_context(chat_ctx), tools, model_settings
         ):
             yield chunk
 
@@ -589,13 +665,18 @@ async def on_simulation_end(ctx: SimulationContext) -> None:
         item.type == "function_call" and item.name == expected_tool for item in items
     ):
         ctx.fail(reason=f"agent never called {expected_tool}")
-    if any(
-        item.type == "message"
-        and item.role == "assistant"
-        and "<expr" in (item.text_content or "")
+    replies = [
+        item.text_content or ""
         for item in items
-    ):
+        if item.type == "message" and item.role == "assistant"
+    ]
+    if any("<expr" in reply for reply in replies):
         ctx.fail(reason="an assistant reply contains <expr> markup")
+    year = str(datetime.now(app_timezone()).year)
+    if ctx.userdata().get("expects_current_year") and not any(
+        year in reply for reply in replies
+    ):
+        ctx.fail(reason=f"no reply states the current year ({year})")
 
 
 @server.rtc_session(agent_name="my-agent", on_simulation_end=on_simulation_end)

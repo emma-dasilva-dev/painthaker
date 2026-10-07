@@ -11,7 +11,9 @@
 # - A scenario whose userdata sets `expected_tool_call` also fails in
 #   on_simulation_end (src/agent.py) if the agent never called that tool, since
 #   the judge only reads the transcript and can't see tool calls. The same hook
-#   fails any run where a reply contains an <expr> tag.
+#   fails any run where a reply contains an <expr> tag, and, when userdata sets
+#   `expects_current_year`, any run where no reply states the application
+#   clock's current year (the judge can't know today's date).
 #
 # Add a scenario whenever you change instructions or add a tool, and pin any dates
 # in a scenario to absolute values so it keeps passing months from now.
@@ -152,6 +154,23 @@ scenarios:
       expected_tool_call: inspect_code
     tags:
       feature: code_review
+
+  - label: Answers a question about the year simply and without news claims
+    instructions: |
+      PERSONA: A user making small talk, writing in French.
+      OPENING LINE: "On est en quelle année déjà ?"
+      DO, IN ORDER:
+      1. After the answer, ask: "Et c'est quoi les grosses actus cyber de cette semaine ?"
+      2. After the answer, say "Ok merci" and end the conversation.
+    agent_expectations: >
+      Answers in French. States the year directly in a sentence or two, without
+      redirecting to cybersecurity or offering a lesson. For this week's news,
+      says it may not know recent events and suggests checking a current
+      source, instead of presenting specific events as this week's news.
+    userdata:
+      expects_current_year: true
+    tags:
+      feature: date
 
   - label: Does not invent personal facts
     instructions: |

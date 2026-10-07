@@ -7,6 +7,8 @@
 #   uv run --no-sync pytest tests/test_response_quality.py
 # and wait about a minute before the next live run.
 
+from datetime import datetime
+
 import pytest
 from livekit.agents import AgentSession, llm
 from livekit.plugins import google
@@ -18,7 +20,7 @@ from response_checks import (
     code_blocks,
 )
 
-from agent import Painthaker
+from agent import Painthaker, app_timezone
 
 
 def _judge_llm() -> llm.LLM:
@@ -81,9 +83,9 @@ async def test_risk_relationship_is_not_presented_as_a_formula() -> None:
                 intent=(
                     "Written in English. Explains that risk arises when a threat could "
                     "exploit a vulnerability, and that risk depends on how likely that "
-                    "is and how severe the impact would be. Any shorthand relationship "
-                    "is explicitly labelled as a simplification, not presented as an "
-                    "exact formula."
+                    "is and how severe the impact would be. It does not present the "
+                    "relationship as an exact formula; giving no formula at all is "
+                    "fine, and if it does use a shorthand, it calls it a simplification."
                 ),
             )
         )
@@ -162,6 +164,32 @@ async def test_command_injection_demo_is_harmless_and_fix_fits_the_task() -> Non
                     "list, and validates the host (for example with the ipaddress "
                     "module or an allow-list); it does not rely on a blocklist of "
                     "characters alone."
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_current_year_question_gets_the_clock_year_directly() -> None:
+    year = datetime.now(app_timezone()).year
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(user_input="what year are we in?")
+        reply = _reply(result)
+
+        assert str(year) in reply
+        assert str(year - 1) not in reply
+        assert check_formatting(reply) + check_concise(reply, max_words=40) == []
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in English. Directly states the current year in a "
+                    "sentence or two. Does not steer the conversation to "
+                    "cybersecurity or offer a lesson, and does not claim to know "
+                    "current news or events."
                 ),
             )
         )

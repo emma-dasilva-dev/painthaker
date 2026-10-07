@@ -6,7 +6,11 @@ Observed but not fixed yet. For each behavior issue, add a scenario to `scenario
 
 Addressed on 2026-10-07 and covered by `tests/test_response_quality.py`, `tests/test_language.py` and `scenarios.yaml`: threats defined as external only, "Threat + Vulnerability = Risk" taught as a formula, raw LaTeX, overly long answers with generic praise, destructive attack examples, `cat`-based fixes, and treating `../` filtering as a file-access boundary. The reply language is now chosen in code (`llm_node` in `src/agent.py`) after replies drifted into French, including partway through an English one.
 
+Also addressed: the agent had no date context and answered "2025" when asked the year. It now gets the date from the application clock on every LLM call (timezone: `PAINTHAKER_TIMEZONE`, default `Africa/Porto-Novo`). Ordinary questions are no longer steered back to cybersecurity.
+
 Still to watch:
+
+- **The date comes from the machine clock.** If the system clock is wrong, Painthaker's date is wrong too.
 
 - **Destructive examples are prevented by the prompt only.** The cliché `; rm -rf /` appeared in 2 of 5 runs of the file-reading review until the prompt named it explicitly; then 0 of 8 code-review runs. A reply could still use a different destructive example.
 - **Language detection is a word-list heuristic.** It handles French and English only. A message with too few common words (e.g. "ok") keeps the previous language. Mixed-language messages go to whichever language has more cue words.

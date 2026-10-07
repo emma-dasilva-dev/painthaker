@@ -128,7 +128,7 @@ uv run --no-sync pytest tests/test_response_quality.py   # live: run separately
 # The Gemini free tier allows 15 requests/min, so wait ~1 min between live runs.
 ```
 
-`.env.local` must define `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. It is ignored by Git; never commit it. Open issues are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+`.env.local` must define `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. Painthaker reads the current date and time from the machine's clock in your timezone. The default is `Africa/Porto-Novo`; to use another, set `PAINTHAKER_TIMEZONE` to an IANA name such as `Europe/Paris`. It is ignored by Git; never commit it. Open issues are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ## Run the agent
 
