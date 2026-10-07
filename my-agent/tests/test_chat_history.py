@@ -15,7 +15,7 @@ from livekit.agents import llm
 from rich.console import Console
 from scripted_llm import Hang, ScriptedFailureError, ScriptedLLM, ToolCall
 
-from agent import Painthaker
+from agent import MISSED_TURN_NOTE, Painthaker
 from chat import ChatApp
 from history import HistoryError, HistoryStore
 
@@ -401,3 +401,88 @@ async def test_tool_call_metadata_survives_save_restart_and_resume(db: Path) -> 
     ]
     assert sent_output.call_id == "c1"
     await second.close()
+
+
+REVIEW = (
+    "Peux-tu vérifier ce code ?\n```python\nimport subprocess\n\n"
+    "def show(name):\n    subprocess.run('ls ' + name, shell=True)\n```"
+)
+FOLLOW_UP = "Et dans la fonction que tu as vérifiée, quel argument faut-il retirer ?"
+
+
+def _system_notes(request: llm.ChatContext) -> str:
+    return "\n".join(
+        item.text_content or ""
+        for item in request.items
+        if item.type == "message" and item.role == "system"
+    )
+
+
+def _user_texts(request: llm.ChatContext) -> list[str]:
+    return [t for r, t in _texts(request.items) if r == "user"]
+
+
+async def test_failed_review_then_follow_up_tells_the_model_the_code_never_arrived(
+    db: Path,
+) -> None:
+    h = Harness(db, [ScriptedFailureError("504"), "Je n'ai pas reçu ce code.", "Ok."])
+    await h.app.start()
+    await h.app.handle_input(REVIEW)  # fails: nothing saved, session rebuilt
+    await h.app.handle_input(FOLLOW_UP)
+    follow_up_request = h.llm.requests[1]
+    assert REVIEW not in _user_texts(follow_up_request)  # the code really is absent
+    assert MISSED_TURN_NOTE in _system_notes(follow_up_request)
+
+    await h.app.handle_input("Voici le code à nouveau : x = 1")
+    assert MISSED_TURN_NOTE not in _system_notes(h.llm.requests[2])  # cleared
+    await h.close()
+
+
+async def test_resumed_conversation_with_the_code_needs_no_warning(db: Path) -> None:
+    first = Harness(db, ["Injection de commande via shell=True."])
+    await first.app.start()
+    await first.app.handle_input(REVIEW)
+    cid = first.app.conversation_id
+    await first.close()
+
+    second = Harness(db, ["Retirez shell=True."])
+    await second.app.start()
+    await second.app.handle_input("/resume " + cid[:8])
+    await second.app.handle_input(FOLLOW_UP)
+    request = second.llm.requests[-1]
+    assert REVIEW in _user_texts(request)  # the reviewed code is there to use
+    notes = _system_notes(request)
+    assert "not included in what you can see" not in notes
+    assert MISSED_TURN_NOTE not in notes
+    await second.close()
+
+
+async def test_code_trimmed_from_context_is_reported_as_hidden(db: Path) -> None:
+    h = Harness(db, ["Revu.", "Oui.", "Je ne vois plus ce code."])
+    h.app.max_chars = 120  # the newer exchanges fill this, so the review is dropped
+    await h.app.start()
+    await h.app.handle_input(REVIEW)
+    await h.app.handle_input("Merci, c'est clair.")
+    await h.app.handle_input(FOLLOW_UP)
+    request = h.llm.requests[-1]
+    assert REVIEW not in _user_texts(request)
+    assert "1 earlier exchange(s) of this conversation are not included" in (
+        _system_notes(request)
+    )
+    await h.close()
+
+
+async def test_resume_reports_exchanges_that_were_never_loaded(db: Path) -> None:
+    h = Harness(db, ["a1", "a2", "a3", "a4"])
+    await h.app.start()
+    for n in (1, 2, 3):
+        await h.app.handle_input(f"q{n}")
+    cid = h.app.conversation_id
+    h.app.max_turns = 1
+    await h.app.handle_input("/new")
+    await h.app.handle_input("/resume " + cid[:8])
+    await h.app.handle_input("q4")
+    request = h.llm.requests[-1]
+    assert _user_texts(request) == ["q3", "q4"]
+    assert "2 earlier exchange(s)" in _system_notes(request)
+    await h.close()

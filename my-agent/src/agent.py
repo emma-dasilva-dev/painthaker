@@ -210,6 +210,29 @@ def app_timezone() -> ZoneInfo:
     return ZoneInfo(os.environ.get("PAINTHAKER_TIMEZONE") or DEFAULT_TIMEZONE)
 
 
+# Missing-context notes. The model can't tell that something is absent from its
+# context; code knows exactly when exchanges were left out or a message failed,
+# so it says so on every LLM call instead of letting the model guess.
+MISSED_TURN_NOTE = (
+    "Context note: the user's previous message failed or was interrupted before "
+    "you answered it, so you never received it (including any code it contained). "
+    "If the user refers to it, say you didn't receive it and ask them to send it again."
+)
+
+
+def hidden_turns_note(count: int) -> str:
+    return (
+        f"Context note: {count} earlier exchange(s) of this conversation are not "
+        "included in what you can see. Don't claim to know what they contained; if "
+        "the user refers to something from them, such as code, say it's no longer "
+        "in your context and ask them to paste it again."
+    )
+
+
+def _user_count(items: list[Any]) -> int:
+    return sum(1 for item in items if item.type == "message" and item.role == "user")
+
+
 def date_note(now: datetime) -> str:
     offset = now.utcoffset()
     if offset is None:
@@ -383,6 +406,8 @@ class Painthaker(Agent):
         language: str = "fr",
         model: llm.LLM | None = None,
         context_chars: int | None = None,
+        hidden_turns: int = 0,
+        missed_user_turn: bool = False,
     ) -> None:
         # `clock` returns the current timezone-aware datetime; tests pass a fake one.
         self._clock = clock or partial(datetime.now, app_timezone())
@@ -390,6 +415,11 @@ class Painthaker(Agent):
         # framework adds the current instructions in front of chat_ctx.
         self._initial_language = language
         self._context_chars = context_chars or context_char_budget()
+        # Code-owned facts about what the model can't see: exchanges left out of
+        # chat_ctx when it was built, and a user message that failed before it
+        # was answered (the chat clears this after the next completed turn).
+        self._hidden_turns = hidden_turns
+        self.missed_user_turn = missed_user_turn
         super().__init__(
             chat_ctx=chat_ctx,
             # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
@@ -482,6 +512,19 @@ class Painthaker(Agent):
                   knowledge comes from training data with a cutoff; for news, recent
                   releases or new vulnerabilities, say you may not know about them and
                   suggest checking a current source.
+
+                # What you can see
+
+                - Only the messages in this conversation are available to you. A system
+                  note may say that earlier exchanges are hidden, or that the user's
+                  last message never reached you.
+                - When the user refers to code, a message or a review you can't find in
+                  the conversation ("the function you checked", "my code above"), say
+                  plainly that you don't have it here and ask them to paste it again.
+                  Never describe, quote or review code you can't see, and don't
+                  reconstruct it from the wording of the question.
+                - When the referenced code *is* in the conversation, use it directly;
+                  don't ask for it again.
 
                 # Reviewing code
 
@@ -579,11 +622,15 @@ class Painthaker(Agent):
         conversation.recent_context), then the language
         and current-date notes. Nothing here is written back to the history."""
         language = self.conversation_language(chat_ctx.items)
-        chat_ctx = llm.ChatContext(
-            recent_context(chat_ctx.items, MAX_CONTEXT_TURNS, self._context_chars)
-        )
+        kept = recent_context(chat_ctx.items, MAX_CONTEXT_TURNS, self._context_chars)
+        hidden = self._hidden_turns + _user_count(chat_ctx.items) - _user_count(kept)
+        chat_ctx = llm.ChatContext(kept)
         chat_ctx.add_message(role="system", content=_LANGUAGE_NOTES[language])
         chat_ctx.add_message(role="system", content=date_note(self._clock()))
+        if hidden:
+            chat_ctx.add_message(role="system", content=hidden_turns_note(hidden))
+        if self.missed_user_turn:
+            chat_ctx.add_message(role="system", content=MISSED_TURN_NOTE)
         return chat_ctx
 
     async def llm_node(

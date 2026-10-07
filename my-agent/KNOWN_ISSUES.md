@@ -15,7 +15,14 @@ Still to watch:
 - **Destructive examples are prevented by the prompt only.** The cliché `; rm -rf /` appeared in 2 of 5 runs of the file-reading review until the prompt named it explicitly; then 0 of 8 code-review runs. A reply could still use a different destructive example.
 - **Language detection is a word-list heuristic.** It handles French and English only. A message with too few common words (e.g. "ok") keeps the previous language. Mixed-language messages go to whichever language has more cue words.
 - **"Concise" is checked with a 160-word limit in the tests**, on two simple questions only.
-- **Answers about code it hasn't seen.** In a brand-new conversation (2026-10-07), "Dans la fonction que tu viens de vérifier, quel argument de subprocess.run faut-il retirer ?" got a confident "Il faut retirer l'argument shell=True…" instead of saying no code had been shared. The guess was plausible from the question's wording, but the agent should say when the context it's asked about isn't there.
+- **Answers about code it hasn't seen (addressed, not guaranteed).** In a brand-new conversation (2026-10-07), "Dans la fonction que tu viens de vérifier, quel argument de subprocess.run faut-il retirer ?" got a confident "Il faut retirer l'argument shell=True…". Now:
+  - a prompt rule says to answer only from code in the conversation and to ask for it again otherwise;
+  - code adds a context note when it knows something is missing: a failed or interrupted message, or exchanges left out by trimming or resuming.
+
+  The same question now gets a request to paste the code. Covered by offline tests on the notes and live tests for the failed, resumed, trimmed and fresh cases. Remaining gaps:
+  - Code can't detect every missing reference. In a fresh process the failure flag from an earlier run is gone, and only the prompt rule applies there.
+  - The model could still answer from a vague reference ("ce code") when something *similar* is in context.
+  - Each live case was checked once.
 
 ## Conversation history
 

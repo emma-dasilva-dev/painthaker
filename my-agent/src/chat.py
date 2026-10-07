@@ -127,6 +127,8 @@ class ChatApp:
         # Valid turns the model can see (serialized), and turns not yet on disk.
         self.turns: list[list[dict[str, Any]]] = []
         self.unsaved: list[tuple[list[dict[str, Any]], str]] = []
+        # Saved turns of a resumed conversation that weren't loaded at all.
+        self.unloaded_turns = 0
 
     # --- session lifecycle -------------------------------------------------
 
@@ -149,13 +151,19 @@ class ChatApp:
             )
         await self._stop_session()
 
-    async def _start_session(self) -> None:
-        """(Re)start the agent with the current valid turns as its context."""
+    async def _start_session(self, *, missed_user_turn: bool = False) -> None:
+        """(Re)start the agent with the current valid turns as its context, and
+        tell it how many exchanges it can't see and whether a message was lost."""
         await self._stop_session()
         items = self._visible_items()
+        visible_turns = sum(1 for item in items if item.get("role") == "user")
         chat_ctx = llm.ChatContext.from_dict({"items": items})
         self.agent = self.agent_factory(
-            chat_ctx=chat_ctx, language=self.language, context_chars=self.max_chars
+            chat_ctx=chat_ctx,
+            language=self.language,
+            context_chars=self.max_chars,
+            hidden_turns=self.unloaded_turns + len(self.turns) - visible_turns,
+            missed_user_turn=missed_user_turn,
         )
         self.session = AgentSession()
         await self.session.start(self.agent)
@@ -266,6 +274,7 @@ class ChatApp:
             self.title = make_title(text)
         turn = _serialize(new_items)
         self.turns.append(turn)
+        self.agent.missed_user_turn = False  # an earlier failure is now superseded
         self.language = reply_language(
             [text_of(item) for item in turn if item.get("role") == "user"],
             initial=self.language,
@@ -280,7 +289,7 @@ class ChatApp:
             style="red",
             markup=False,
         )
-        await self._start_session()
+        await self._start_session(missed_user_turn=True)
 
     async def _save_unsaved(self) -> None:
         while self.unsaved and self.conversation_id is not None:
@@ -363,6 +372,7 @@ class ChatApp:
             info.language,
         )
         self.turns = complete_turns(items)
+        self.unloaded_turns = max(0, info.turns - len(self.turns))
         await self._start_session()
         self.console.print(
             f"Reprise de « {info.title} » ({info.short_id}, {info.turns} échange(s), "

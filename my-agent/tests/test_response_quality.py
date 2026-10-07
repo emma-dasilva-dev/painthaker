@@ -193,3 +193,74 @@ async def test_current_year_question_gets_the_clock_year_directly() -> None:
                 ),
             )
         )
+
+
+# Missing-context cases. The agent is built the way the chat builds it after a
+# failed turn, a resume, or trimming, so these check what Gemini does with it.
+_REVIEW = (
+    "Peux-tu vérifier ce code ?\n```python\nimport subprocess\n\n"
+    "def show(name):\n    subprocess.run('ls ' + name, shell=True)\n```"
+)
+_FOLLOW_UP = "Et dans la fonction que tu as vérifiée, quel argument faut-il retirer ?"
+_ASKS_TO_PASTE = (
+    "Written in French. Says it doesn't have (or didn't receive) the code the user "
+    "refers to, and asks the user to paste or send it again. It does not describe, "
+    "quote or review that code, and does not name a specific argument of that "
+    "function as the answer."
+)
+
+
+def _reviewed_turn() -> llm.ChatContext:
+    chat_ctx = llm.ChatContext()
+    chat_ctx.add_message(role="user", content=_REVIEW)
+    chat_ctx.add_message(
+        role="assistant",
+        content=(
+            "Injection de commande confirmée : `name` arrive dans une commande shell "
+            "via `shell=True`."
+        ),
+    )
+    return chat_ctx
+
+
+async def _follow_up(agent: Painthaker, intent: str) -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(agent)
+        result = await session.run(user_input=_FOLLOW_UP)
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(judge_llm, intent=intent)
+        )
+
+
+@pytest.mark.asyncio
+async def test_follow_up_after_a_failed_review_asks_for_the_code() -> None:
+    await _follow_up(Painthaker(missed_user_turn=True), _ASKS_TO_PASTE)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_in_a_resumed_conversation_uses_the_code() -> None:
+    await _follow_up(
+        Painthaker(chat_ctx=_reviewed_turn()),
+        "Written in French. Answers directly that `shell=True` should be removed "
+        "(passing the command as an argument list). It does not claim the code is "
+        "missing and does not ask the user to paste or resend it; offering further "
+        "help, such as showing a rewrite, is fine.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_follow_up_about_code_trimmed_from_context_asks_for_it() -> None:
+    chat_ctx = _reviewed_turn()
+    chat_ctx.add_message(role="user", content="Merci, c'est clair.")
+    chat_ctx.add_message(role="assistant", content="Avec plaisir.")
+    # A budget the two newer exchanges fill, so the review is trimmed away.
+    await _follow_up(Painthaker(chat_ctx=chat_ctx, context_chars=120), _ASKS_TO_PASTE)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_in_a_fresh_conversation_asks_for_the_code() -> None:
+    # The recorded incident: the review failed in an earlier process, so no
+    # context note exists and only the prompt rule can prevent a made-up answer.
+    await _follow_up(Painthaker(), _ASKS_TO_PASTE)

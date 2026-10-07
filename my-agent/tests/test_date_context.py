@@ -88,3 +88,13 @@ def test_original_chat_context_is_not_modified() -> None:
     chat_ctx.add_message(role="user", content="Bonjour")
     agent.turn_context(chat_ctx)
     assert len(chat_ctx.items) == 1
+
+
+def test_context_notes_only_when_something_is_missing() -> None:
+    clock = lambda: datetime(2026, 10, 7, 9, 0, tzinfo=PORTO_NOVO)  # noqa: E731
+    assert "Context note" not in _system_notes(Painthaker(clock=clock), "Bonjour")
+    notes = _system_notes(
+        Painthaker(clock=clock, hidden_turns=3, missed_user_turn=True), "Bonjour"
+    )
+    assert "3 earlier exchange(s)" in notes
+    assert "never received it" in notes
