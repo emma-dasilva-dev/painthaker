@@ -75,40 +75,21 @@ lk app env --write --destination .env.local
 
 </details>
 
-## Painthaker: verified setup on Ubuntu WSL
+## Painthaker on Ubuntu WSL
 
-Painthaker is developed and run from Ubuntu WSL. This was verified on 2026-10-07 with uv 0.12.21, `lk` 2.18.8 and Python 3.11.16. On native Windows, the agent currently crashes at startup with `exit status 0xc0000005`; that hasn't been diagnosed.
+Painthaker runs from Ubuntu WSL (verified 2026-10-07 with uv 0.12.21, `lk` 2.18.8 and Python 3.11.16). On native Windows, the agent currently crashes at startup with `exit status 0xc0000005`; that hasn't been diagnosed.
 
-The project folder lives on the Windows drive, and `my-agent/.venv` is a **Windows** virtual environment (Python 3.12, `Scripts/`). Don't reuse or overwrite it from Linux. Linux uses a separate environment outside the repository, selected explicitly with `UV_PROJECT_ENVIRONMENT`:
+Linux uses its own environment outside the repository, `~/.virtualenvs/painthaker`. The project's `my-agent/.venv` is for Windows; don't run plain `uv run` or `uv sync` from Linux in this folder. Without `UV_PROJECT_ENVIRONMENT`, uv would replace `.venv` with an empty Linux one.
 
-```console
-cd /mnt/c/Users/HP/Documents/Development/painthaker/my-agent
-export UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker"
+### Start the chat
 
-# First time only, or after uv.lock changes:
-uv sync --locked --python 3.11
-```
-
-To make `lk` start the agent with that environment, put it on `PATH` in the same shell:
+From any directory, in any new terminal:
 
 ```console
-export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT" PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
-
-lk agent console --text                      # chat with Painthaker in the terminal (no pasting, see below)
-lk agent debugger start                      # or drive it turn by turn
-lk agent debugger say "Bonjour !"
-lk agent debugger stop
+/mnt/c/Users/HP/Documents/Development/painthaker/my-agent/scripts/chat.sh
 ```
 
-These variables only last for the current shell. Run the exports in every new terminal.
-
-### Pasting messages and code
-
-`lk agent console` 2.18.8 drops pasted text, and its input is a single line capped at 1000 characters. To paste messages or multiline code, use the project's own text chat. It runs the same agent locally in text mode:
-
-```console
-uv run --no-sync python src/chat.py
-```
+The script selects the Linux environment itself, so you don't need any exports. It checks that the environment matches `uv.lock` without installing anything, then starts `src/chat.py`. It stops with the exact setup command if the environment is missing or out of date. To use another environment, set `PAINTHAKER_VENV`.
 
 | Key | Action |
 |---|---|
@@ -118,17 +99,38 @@ uv run --no-sync python src/chat.py
 | Ctrl+C | Clear the current input |
 | Ctrl+D | Quit |
 
-Checks:
+### First-time setup, or after `uv.lock` changes
 
 ```console
+cd /mnt/c/Users/HP/Documents/Development/painthaker/my-agent
+UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker" uv sync --locked --python 3.11
+```
+
+`.env.local` must define `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. It is ignored by Git; never commit it.
+
+Painthaker reads the current date and time from the machine's clock in your timezone. The default is `Africa/Porto-Novo`; to use another, set `PAINTHAKER_TIMEZONE` to an IANA name such as `Europe/Paris`.
+
+### Advanced: tests, debugger, `lk` console
+
+These commands need the Linux environment selected in the current shell first:
+
+```console
+cd /mnt/c/Users/HP/Documents/Development/painthaker/my-agent
+export UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker"
+export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT" PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
+
 uv run --no-sync ruff format && uv run --no-sync ruff check
-uv run --no-sync pytest tests/test_language.py tests/test_response_checks.py tests/test_chat_input.py   # offline, no LLM calls
+uv run --no-sync pytest tests/test_language.py tests/test_date_context.py tests/test_response_checks.py tests/test_chat_input.py   # offline
 uv run --no-sync pytest tests/test_agent.py              # live: calls Gemini
 uv run --no-sync pytest tests/test_response_quality.py   # live: run separately
 # The Gemini free tier allows 15 requests/min, so wait ~1 min between live runs.
+
+lk agent debugger start                      # drive the agent turn by turn
+lk agent debugger say "Bonjour !"
+lk agent debugger stop
 ```
 
-`.env.local` must define `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. Painthaker reads the current date and time from the machine's clock in your timezone. The default is `Africa/Porto-Novo`; to use another, set `PAINTHAKER_TIMEZONE` to an IANA name such as `Europe/Paris`. It is ignored by Git; never commit it. Open issues are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+`lk agent console --text` also works, but it can't take pasted text: lk 2.18.8 drops pastes, and its input is one line capped at 1000 characters. Use `scripts/chat.sh` instead. Open issues are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ## Run the agent
 

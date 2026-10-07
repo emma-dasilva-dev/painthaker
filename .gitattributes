@@ -1,2 +1,4 @@
 # Store text files with LF in the repository, whichever Git (Windows or WSL) commits them.
 * text=auto
+# Shell scripts run in WSL/Linux: keep LF even in a Windows checkout.
+*.sh text eol=lf
