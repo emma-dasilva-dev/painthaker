@@ -75,6 +75,7 @@ class Excerpt:
     text: str
     distinct_terms: int
     hits: int
+    shortened: bool = False  # a line was cut to MAX_LINE_CHARS
 
 
 @dataclass
@@ -94,7 +95,16 @@ def _candidate_files(root: Path, result: SearchResult) -> list[Path]:
     """Regular, non-hidden .md/.txt files under root, in a stable order."""
     files: list[Path] = []
     skipped_links = 0
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+    def unreadable(error: OSError) -> None:
+        # A folder we may not list: report it (name only), never work around it.
+        where = Path(error.filename or root)
+        name = where.relative_to(root).as_posix() if where != root else "."
+        result.incomplete.append(f"folder {name}: could not be read, skipped")
+
+    for dirpath, dirnames, filenames in os.walk(
+        root, onerror=unreadable, followlinks=False
+    ):
         current = Path(dirpath)
         kept_dirs = []
         for name in sorted(dirnames):
@@ -151,8 +161,13 @@ def _read_note(path: Path, root: Path, result: SearchResult) -> list[str] | None
     except UnicodeDecodeError:
         result.incomplete.append(f"{relative}: not valid UTF-8, skipped")
         return None
-    # Split on "\n" only, so line numbers match what editors show.
-    return [line.rstrip("\r") for line in text.split("\n")]
+    # Split on "\n" only, so line numbers match what editors show. A final
+    # newline ends the last line; it doesn't start an extra empty one, so
+    # citations never point past the file's last line.
+    lines = [line.rstrip("\r") for line in text.split("\n")]
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def _excerpts_for(lines: list[str], terms: list[str], source: str) -> list[Excerpt]:
@@ -167,12 +182,23 @@ def _excerpts_for(lines: list[str], terms: list[str], source: str) -> list[Excer
         else:
             windows.append([start, end])
     excerpts = []
-    for start, end in windows:
-        end = min(end, start + MAX_EXCERPT_LINES - 1)
-        found = set().union(*(words[i] & set(terms) for i in range(start, end + 1)))
-        hits = sum(len(words[i] & set(terms)) for i in range(start, end + 1))
-        text = "\n".join(line[:MAX_LINE_CHARS] for line in lines[start : end + 1])
-        excerpts.append(Excerpt(source, start + 1, end + 1, text, len(found), hits))
+    for window_start, window_end in windows:
+        # A long merged passage is split into consecutive pieces of at most
+        # MAX_EXCERPT_LINES lines, so every matching line stays a candidate;
+        # each piece is scored on its own and ranked with the others. A piece
+        # with no matching line (pure context) is not a result and is dropped.
+        for start in range(window_start, window_end + 1, MAX_EXCERPT_LINES):
+            end = min(window_end, start + MAX_EXCERPT_LINES - 1)
+            span = range(start, end + 1)
+            found = set().union(*(words[i] & set(terms) for i in span))
+            if not found:
+                continue
+            hits = sum(len(words[i] & set(terms)) for i in span)
+            shortened = any(len(lines[i]) > MAX_LINE_CHARS for i in span)
+            text = "\n".join(line[:MAX_LINE_CHARS] for line in lines[start : end + 1])
+            excerpts.append(
+                Excerpt(source, start + 1, end + 1, text, len(found), hits, shortened)
+            )
     return excerpts
 
 
@@ -213,6 +239,10 @@ def search(query: str, root: Path) -> SearchResult:
             break
         result.excerpts.append(excerpt)
         used += len(excerpt.text)
+    if any(e.shortened for e in result.excerpts):
+        result.incomplete.append(
+            f"some lines longer than {MAX_LINE_CHARS} characters were shortened"
+        )
     return result
 
 

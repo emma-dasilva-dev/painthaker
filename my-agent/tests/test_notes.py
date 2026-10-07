@@ -62,7 +62,7 @@ def test_multiline_passage_keeps_its_lines_together() -> None:
     assert (excerpt.source, excerpt.start_line, excerpt.end_line) == (
         "projets/serveur.txt",
         3,
-        7,
+        6,
     )
     assert excerpt.text.split("\n")[2:4] == [
         "Les sauvegardes nocturnes démarrent à 02:30",
@@ -100,7 +100,7 @@ def test_edits_and_deletions_show_up_on_the_next_search(notes_dir: Path) -> None
         "Notes réseau\nLe routeur a été passé sur le canal 36.\n", encoding="utf-8"
     )
     [excerpt] = search("canal routeur", notes_dir).excerpts
-    assert (excerpt.start_line, excerpt.end_line) == (1, 3)
+    assert (excerpt.start_line, excerpt.end_line) == (1, 2)
     assert "canal 36" in excerpt.text and "canal Wi-Fi 11" not in excerpt.text
 
     (notes_dir / "reseau.md").unlink()
@@ -235,3 +235,95 @@ def test_framing_phrases_are_not_search_terms() -> None:
         "routeur",
     ]
     assert query_terms("Selon mes notes, à quelle heure ?") == ["heure"]
+
+
+def _router_list(root: Path, count: int = 30) -> list[str]:
+    lines = [f"Routeur {n} : salle {n}" for n in range(1, count + 1)]
+    lines[24] = "Routeur 25 : salle 25, canal Wi-Fi 7, labo Baobab"
+    (root / "routeurs.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
+def test_answer_deep_in_a_long_matching_list_is_retrieved_and_cited(
+    notes_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review regression: 30 adjacent matching lines merged into one passage
+    # that was cut to its first 12 lines, losing line 25 while reporting the
+    # search as complete.
+    _router_list(notes_dir)
+    result = search("canal Wi-Fi routeur Baobab", notes_dir)
+    best = result.excerpts[0]
+    assert best.source == "routeurs.md"
+    assert best.start_line <= 25 <= best.end_line
+    assert "canal Wi-Fi 7, labo Baobab" in best.text
+    _assert_line_ranges_are_exact(notes_dir, result)
+
+    monkeypatch.setenv(NOTES_DIR_ENV, str(notes_dir))
+    payload = search_notes_payload("canal Wi-Fi routeur Baobab")
+    first = payload["excerpts"][0]
+    assert first["source"] == f"routeurs.md:{first['start_line']}-{first['end_line']}"
+    assert first["start_line"] <= 25 <= first["end_line"]
+
+
+def test_splitting_keeps_every_matching_line_in_some_excerpt() -> None:
+    lines = [f"routeur {n}" if n % 3 else f"note {n}" for n in range(1, 41)]
+    excerpts = notes._excerpts_for(lines, ["routeur"], "liste.md")
+    covered = {n for e in excerpts for n in range(e.start_line, e.end_line + 1)}
+    matching = {n for n, line in enumerate(lines, 1) if line.startswith("routeur")}
+    assert matching <= covered
+    assert all(
+        e.end_line - e.start_line + 1 <= notes.MAX_EXCERPT_LINES for e in excerpts
+    )
+    spans = sorted((e.start_line, e.end_line) for e in excerpts)
+    assert all(a_end < b_start for (_, a_end), (b_start, _) in zip(spans, spans[1:]))
+    for e in excerpts:  # citations stay exact
+        assert e.text == "\n".join(lines[e.start_line - 1 : e.end_line])
+
+
+def test_limits_still_hold_after_splitting_and_omissions_are_reported(
+    notes_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _router_list(notes_dir, count=120)  # ~10 pieces of 12 matching lines
+    result = search("routeur salle", notes_dir)
+    assert len(result.excerpts) == notes.MAX_EXCERPTS
+    assert any("lower-ranked excerpt(s) not shown" in r for r in result.incomplete)
+    assert sum(len(e.text) for e in result.excerpts) <= notes.MAX_OUTPUT_CHARS
+
+    monkeypatch.setattr(notes, "MAX_OUTPUT_CHARS", 300)
+    result = search("routeur salle", notes_dir)
+    assert sum(len(e.text) for e in result.excerpts) <= 300
+    assert "output size limit reached; some excerpts omitted" in result.incomplete
+
+
+def test_shortened_long_lines_are_reported(notes_dir: Path) -> None:
+    long_line = "routeur canal " + "x" * (notes.MAX_LINE_CHARS + 50)
+    (notes_dir / "long.md").write_text(long_line + "\n", encoding="utf-8")
+    result = search("routeur canal xxx", notes_dir)
+    assert any(e.source == "long.md" for e in result.excerpts)
+    assert any("were shortened" in r for r in result.incomplete)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read any folder")
+def test_unreadable_subfolder_makes_the_search_incomplete(notes_dir: Path) -> None:
+    private = notes_dir / "prive"
+    private.mkdir()
+    (private / "wifi.md").write_text("Le canal Wi-Fi secret est 3.\n", encoding="utf-8")
+    os.chmod(private, 0)
+    try:
+        result = search("canal Wi-Fi", notes_dir)
+    finally:
+        os.chmod(private, 0o700)
+    assert "folder prive: could not be read, skipped" in result.incomplete
+    assert all("secret" not in e.text for e in result.excerpts)  # nothing leaked
+    assert {e.source for e in result.excerpts} == {"reseau.md"}
+
+
+def test_citations_never_point_past_the_last_real_line(notes_dir: Path) -> None:
+    _router_list(notes_dir)  # 30 lines, ending with a newline
+    result = search("canal Wi-Fi routeur Baobab", notes_dir)
+    for e in result.excerpts:
+        real_lines = len(
+            (notes_dir / e.source).read_text(encoding="utf-8").splitlines()
+        )
+        assert e.end_line <= real_lines
+    assert result.excerpts[0].end_line == 30
