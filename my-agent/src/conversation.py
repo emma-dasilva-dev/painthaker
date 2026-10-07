@@ -24,7 +24,7 @@ MAX_CONTEXT_CHARS = 60_000
 # handoffs and config updates are rebuilt by the agent, never saved.
 CONVERSATION_TYPES = frozenset({"message", "function_call", "function_call_output"})
 
-COMMANDS = ("new", "list", "resume", "delete", "help")
+COMMANDS = ("new", "list", "resume", "delete", "prefs", "help")
 
 
 def _type(item: Any) -> str:

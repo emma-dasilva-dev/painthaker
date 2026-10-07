@@ -42,6 +42,12 @@ Still to watch:
 - **`lk agent console --text` can't take pastes.** In lk 2.18.8, the console's `Update` handles key events only. Bracketed pastes (`tea.PasteMsg`) are dropped, and the single-line input would turn newlines into spaces and cut text at 1000 characters anyway. Work around it with `src/chat.py` (see README). Reported to LiveKit through `lk docs submit-feedback`.
 - **Native Windows crash.** `lk agent console --text` exits with `0xc0000005` ("Agent exited with no output"). Not diagnosed; use Ubuntu WSL (see README).
 
+## Preferences
+
+- **Level and length depend on the prompt.** The language preference is applied in code. `level` and `length` are a per-call note to the model, so how closely replies follow them, and whether a one-off "explique en détail" is honored, depends on the model. Offline tests verify the note reaches the model, not the reply's style. No live Gemini check has been run for preferences yet.
+- **Language overrides recognize explicit requests only.** With `language fr`, an English message gets a French reply unless it says something like "in English" or "en anglais". Other phrasings aren't detected as requests.
+- **Applies everywhere.** Preferences are global, not per conversation.
+
 ## Notes search
 
 - **Keyword matching only.** A question worded differently from the notes ("impression" vs "imprime") finds only what the shared words reach; there are no synonyms or embeddings. A live check (2026-10-07) first exposed a fixed two-word threshold that dropped the only matching passage. The threshold is now relative, with a regression test.
