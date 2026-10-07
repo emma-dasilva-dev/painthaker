@@ -409,6 +409,7 @@ class Painthaker(Agent):
         context_chars: int | None = None,
         hidden_turns: int = 0,
         missed_user_turn: bool = False,
+        app_note: str | None = None,
     ) -> None:
         # `clock` returns the current timezone-aware datetime; tests pass a fake one.
         self._clock = clock or partial(datetime.now, app_timezone())
@@ -421,6 +422,9 @@ class Painthaker(Agent):
         # was answered (the chat clears this after the next completed turn).
         self._hidden_turns = hidden_turns
         self.missed_user_turn = missed_user_turn
+        # What the application around the agent can do (e.g. the terminal chat's
+        # saved history); the agent is also used without it, so it's per app.
+        self._app_note = app_note
         super().__init__(
             chat_ctx=chat_ctx,
             # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
@@ -483,6 +487,12 @@ class Painthaker(Agent):
                   exact formula or law; for example, risk depends on the likelihood that
                   a threat exploits a vulnerability and on the impact, which is not
                   arithmetic.
+                - Avoid absolute words ("always", "never", "permanent", "impossible",
+                  "can't change") unless the claim truly has no exceptions. Where
+                  exceptions matter in practice (software configuration, operating
+                  system defaults, virtualization, attackers), state the usual case
+                  and then the main exceptions in a few words. This matters most for
+                  identifiers and settings that people rely on for security.
 
                 # Security demonstrations
 
@@ -628,6 +638,8 @@ class Painthaker(Agent):
         chat_ctx = llm.ChatContext(kept)
         chat_ctx.add_message(role="system", content=_LANGUAGE_NOTES[language])
         chat_ctx.add_message(role="system", content=date_note(self._clock()))
+        if self._app_note:
+            chat_ctx.add_message(role="system", content=self._app_note)
         if hidden:
             chat_ctx.add_message(role="system", content=hidden_turns_note(hidden))
         if self.missed_user_turn:

@@ -111,7 +111,9 @@ Each start opens a **new** conversation; an old one is never loaded automaticall
 | `/delete <id>` | Delete a conversation permanently, after you type `oui` to confirm. Anything else cancels |
 | `/help` | Show the commands and keys |
 
-Commands are handled locally and never sent to the model. A line counts as a command only if it is exactly one of these. Multiline text and things like `/etc/passwd …` are sent as normal messages.
+Commands are handled locally and never sent to the model. A single line that starts with one of these commands is always treated as that command. If its argument is malformed, as in `/resume ID`, `/resume the Baobab chat` or `/new please`, Painthaker shows how to use it and sends nothing. Multiline text, paths such as `/etc/passwd …`, and a line starting with an unknown `/word` followed by more text are sent as normal messages.
+
+The model is told how this history works: chats are saved locally, a new chat starts empty, and older chats are loaded only with `/resume <id>`. When you ask about an earlier conversation that isn't loaded, it should point you to `/list` and `/resume` rather than deny that history exists or guess what was said.
 
 How saving works:
 

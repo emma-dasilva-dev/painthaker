@@ -24,6 +24,11 @@ Still to watch:
   - The model could still answer from a vague reference ("ce code") when something *similar* is in context.
   - Each live case was checked once.
 
+- **Absolute claims and the saved history (addressed, not guaranteed).** In real use (2026-10-07), the agent said MAC addresses are permanent and "never change", and in a new chat it said Painthaker had no persistent history.
+  - **MAC addresses:** Android 10+ randomizes the Wi-Fi MAC address by default (source.android.com), and Apple devices use a private, optionally rotating, address per network. The prompt now has a general rule against absolute words where exceptions matter; it doesn't list individual facts.
+  - **History:** the terminal chat gives the agent a note on how saved history works (local saves, new chats start empty, `/list` and `/resume <id>`).
+  - **Checks:** each case passed one live check, with different wording from the original question. Other absolute claims can still slip through.
+
 ## Conversation history
 
 - **Gemini thought signatures aren't persisted.** The Gemini plugin keeps them in memory on the LLM object (`_thought_signatures`), not in the chat items, so they're lost on restart, on `/resume`, and when a failed turn rebuilds the session. Gemini accepted resumed tool history without them in a live test (2026-10-07). Google's docs don't say whether signatures on earlier turns are validated, so this could change.

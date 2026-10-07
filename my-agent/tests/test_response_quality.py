@@ -7,6 +7,7 @@
 #   uv run --no-sync pytest tests/test_response_quality.py
 # and wait about a minute before the next live run.
 
+import re
 from datetime import datetime
 
 import pytest
@@ -21,6 +22,7 @@ from response_checks import (
 )
 
 from agent import Painthaker, app_timezone
+from chat import TERMINAL_CHAT_NOTE
 
 
 def _judge_llm() -> llm.LLM:
@@ -265,3 +267,66 @@ async def test_follow_up_in_a_fresh_conversation_asks_for_the_code() -> None:
     # The recorded incident: the review failed in an earlier process, so no
     # context note exists and only the prompt rule can prevent a made-up answer.
     await _follow_up(Painthaker(), _ASKS_TO_PASTE)
+
+
+# Absolute claims and the terminal chat's capabilities. Each question is
+# worded differently from the conversation where the problem appeared.
+_ABSOLUTE = re.compile(
+    r"ne (?:change|changent|peut|peuvent) jamais|jamais modifi|"
+    r"(?:est|sont) (?:fixe|fixes|permanente?s?|immuables?)\b|never change",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.asyncio
+async def test_mac_address_answer_mentions_that_it_can_change() -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input="Mon adresse MAC me suit partout, c'est un identifiant définitif ?"
+        )
+        reply = _reply(result)
+        match = _ABSOLUTE.search(reply)
+        assert match is None, f"absolute claim: {match.group(0)!r}"
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in French. Explains that a network card has a "
+                    "manufacturer-assigned MAC address, but the address a device "
+                    "uses can differ or change: for example randomized/private "
+                    "Wi-Fi addresses on phones and computers, or an address set in "
+                    "software. Does not claim MAC addresses are permanent or can "
+                    "never change."
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_new_chat_explains_saved_history_without_denying_it() -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker(app_note=TERMINAL_CHAT_NOTE))
+        result = await session.run(
+            user_input=(
+                "Tu peux reprendre là où on s'était arrêtés la semaine dernière "
+                "sur mon réseau domestique ?"
+            )
+        )
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in French. Says the earlier conversation isn't loaded "
+                    "in this chat (it may be saved) and tells the user to use /list "
+                    "and then /resume with the conversation's ID. Does not say the "
+                    "application has no saved or persistent history. Repeating the "
+                    "topic the user named (their home network) is fine, but it does "
+                    "not invent anything else about what was said earlier."
+                ),
+            )
+        )

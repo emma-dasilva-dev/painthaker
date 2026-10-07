@@ -168,16 +168,28 @@ def make_title(first_message: str, max_length: int = 60) -> str:
 
 
 def parse_command(text: str) -> tuple[str, str | None] | None:
-    """('name', argument) for a local command, ('unknown', name) for /word that
-    isn't one, or None for a normal message (including multiline text and
-    paths such as /etc/passwd)."""
+    """Classify one line of input.
+
+    - ('name', argument) when the first word is a known command, whatever
+      follows it (the argument is the rest of the line, possibly malformed, so
+      the chat can show usage instead of sending it to the model);
+    - ('unknown', name) for a lone /word that isn't a command;
+    - None for a normal message: multiline text, paths such as /etc/passwd,
+      or an unknown /word followed by more text ("/tmp est plein ?").
+    """
     stripped = text.strip()
     if "\n" in stripped:
         return None
-    match = re.fullmatch(r"/([a-z]+)(?:\s+(\S+))?\s*", stripped)
+    match = re.fullmatch(r"/([A-Za-z]+)(?:\s+(.*))?", stripped)
     if not match:
         return None
-    name, argument = match.group(1), match.group(2)
-    if name not in COMMANDS:
-        return ("unknown", name)
-    return (name, argument)
+    name = match.group(1).lower()
+    argument = (match.group(2) or "").strip() or None
+    if name in COMMANDS:
+        return (name, argument)
+    return ("unknown", name) if argument is None else None
+
+
+def is_conversation_id(argument: str) -> bool:
+    """A conversation ID or prefix as shown by /list: 4-32 hex characters."""
+    return re.fullmatch(r"[0-9a-f]{4,32}", argument.lower()) is not None

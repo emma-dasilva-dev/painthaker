@@ -7,6 +7,7 @@ from conversation import (
     complete_turns,
     context_char_budget,
     is_complete_turn,
+    is_conversation_id,
     make_title,
     parse_command,
     recent_context,
@@ -158,3 +159,37 @@ def test_char_budget_setting(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PAINTHAKER_CONTEXT_CHARS", bad)
         with pytest.raises(ValueError, match="positive integer"):
             context_char_budget()
+
+
+def test_known_commands_with_malformed_arguments_stay_commands() -> None:
+    # Handled locally (usage message) instead of reaching the model.
+    assert parse_command("/resume ID") == ("resume", "ID")
+    assert parse_command("/resume la conversation sur Baobab") == (
+        "resume",
+        "la conversation sur Baobab",
+    )
+    assert parse_command("/delete toutes les conversations") == (
+        "delete",
+        "toutes les conversations",
+    )
+    assert parse_command("/new conversation sur les MAC") == (
+        "new",
+        "conversation sur les MAC",
+    )
+    assert parse_command("/RESUME 7a073292") == ("resume", "7a073292")
+
+
+def test_paths_and_pastes_starting_with_a_slash_remain_messages() -> None:
+    assert parse_command("/etc/passwd est lisible par tous ?") is None
+    assert parse_command("/tmp est plein, que faire ?") is None
+    assert parse_command("/usr/bin/python3 -V") is None
+    assert parse_command("/resume 7a073292\nvoici aussi mon code :\n    x = 1") is None
+
+
+def test_conversation_ids() -> None:
+    assert is_conversation_id("7a073292")
+    assert is_conversation_id("7A07")
+    assert not is_conversation_id("ID")
+    assert not is_conversation_id("7a0")
+    assert not is_conversation_id("la conversation")
+    assert not is_conversation_id("7a07; DROP")

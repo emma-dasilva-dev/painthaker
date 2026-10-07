@@ -35,6 +35,7 @@ from conversation import (
     complete_turns,
     context_char_budget,
     is_complete_turn,
+    is_conversation_id,
     is_conversation_item,
     make_title,
     parse_command,
@@ -63,6 +64,20 @@ Commandes (traitées localement, jamais envoyées au modèle) :
   /help           cette aide
 """
     + KEYS
+)
+
+# Tells the agent what this application can do, so it neither denies the saved
+# history nor claims to have read conversations that aren't loaded.
+TERMINAL_CHAT_NOTE = (
+    "Application note: you are running in Painthaker's terminal chat. Completed "
+    "exchanges are saved locally on the user's computer. Each new chat starts "
+    "empty; an older conversation is loaded only when the user runs "
+    "/resume <id>, using an ID from /list. You can't open, search or list saved "
+    "conversations yourself, and you only know what is in your current context. "
+    "If the user asks about an earlier conversation that isn't in your context, "
+    "say it may be saved but isn't loaded here, and suggest /list then "
+    "/resume <id>. Don't claim the chat has no saved history, and don't guess "
+    "what an unloaded conversation contained."
 )
 
 AgentFactory = Callable[..., Painthaker]
@@ -164,6 +179,7 @@ class ChatApp:
             context_chars=self.max_chars,
             hidden_turns=self.unloaded_turns + len(self.turns) - visible_turns,
             missed_user_turn=missed_user_turn,
+            app_note=TERMINAL_CHAT_NOTE,
         )
         self.session = AgentSession()
         await self.session.start(self.agent)
@@ -214,14 +230,28 @@ class ChatApp:
         name, argument = command
         if name == "unknown":
             self.console.print(f"Commande inconnue : /{argument}. Tapez /help.")
+        elif name in ("new", "list", "help") and argument:
+            self.console.print(
+                f"/{name} ne prend pas d'argument. Tapez simplement /{name}. "
+                "(Rien n'a été envoyé au modèle.)",
+                markup=False,
+            )
+        elif name in ("resume", "delete") and not (
+            argument and is_conversation_id(argument)
+        ):
+            self.console.print(
+                f"Usage : /{name} <id>, où <id> est l'identifiant affiché par /list "
+                f"(au moins 4 caractères, par exemple /{name} 7a073292). "
+                "Tapez /list pour voir vos conversations. "
+                "(Rien n'a été envoyé au modèle.)",
+                markup=False,
+            )
         elif name == "help":
             self.console.print(HELP, markup=False)
         elif name == "new":
             await self.new_conversation()
         elif name == "list":
             await self.list_conversations()
-        elif name in ("resume", "delete") and not argument:
-            self.console.print(f"Usage : /{name} <id> (voir /list).")
         elif name == "resume":
             await self.resume(argument)
         elif name == "delete":

@@ -16,7 +16,7 @@ from rich.console import Console
 from scripted_llm import Hang, ScriptedFailureError, ScriptedLLM, ToolCall
 
 from agent import MISSED_TURN_NOTE, Painthaker
-from chat import ChatApp
+from chat import TERMINAL_CHAT_NOTE, ChatApp
 from history import HistoryError, HistoryStore
 
 CODE = "import os\n\ndef run(cmd):\n    os.system(cmd)  # indentation kept\n"
@@ -485,4 +485,56 @@ async def test_resume_reports_exchanges_that_were_never_loaded(db: Path) -> None
     request = h.llm.requests[-1]
     assert _user_texts(request) == ["q3", "q4"]
     assert "2 earlier exchange(s)" in _system_notes(request)
+    await h.close()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/resume ID",
+        "/resume la conversation sur Baobab",
+        "/resume",
+        "/delete toutes",
+        "/new conversation sur les MAC",
+        "/list des conversations",
+    ],
+)
+async def test_malformed_commands_show_usage_and_never_reach_the_model(
+    db: Path, command: str
+) -> None:
+    h = Harness(db, ["Réponse."])
+    await h.app.start()
+    await h.app.handle_input("Bonjour")
+    cid = h.app.conversation_id
+    requests_before = len(h.llm.requests)
+
+    await h.app.handle_input(command)
+
+    assert len(h.llm.requests) == requests_before
+    assert "Rien n'a été envoyé au modèle" in h.printed()
+    assert h.app.conversation_id == cid  # nothing switched, created or deleted
+    assert [i.id for i in h.store.list_conversations()] == [cid]
+    await h.close()
+
+
+async def test_paths_and_multiline_pastes_starting_with_a_slash_are_sent(
+    db: Path,
+) -> None:
+    h = Harness(db, ["Réponse 1.", "Réponse 2."])
+    await h.app.start()
+    await h.app.handle_input("/etc/passwd est lisible par tous, c'est grave ?")
+    await h.app.handle_input("/resume 7a073292\nvoici aussi mon code :\n    x = 1")
+    sent = [t for r, t in _texts(h.llm.requests[-1].items) if r == "user"]
+    assert sent == [
+        "/etc/passwd est lisible par tous, c'est grave ?",
+        "/resume 7a073292\nvoici aussi mon code :\n    x = 1",
+    ]
+    await h.close()
+
+
+async def test_the_model_is_told_how_saved_history_works(db: Path) -> None:
+    h = Harness(db, ["Réponse."])
+    await h.app.start()
+    await h.app.handle_input("Tu te souviens de notre conversation d'hier ?")
+    assert TERMINAL_CHAT_NOTE in _system_notes(h.llm.requests[-1])
     await h.close()
