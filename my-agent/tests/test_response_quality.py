@@ -332,3 +332,75 @@ async def test_new_chat_explains_saved_history_without_denying_it() -> None:
                 ),
             )
         )
+
+
+# Notes search, with invented facts in a temporary notes folder.
+_LAB_NOTES = (
+    "# Labo Kapokier\n"
+    "\n"
+    "Le labo Kapokier possède une imprimante 3D nommée Tisserande.\n"
+    "L'imprimante Tisserande imprime en PLA à 210 °C.\n"
+    "Elle est réservée le jeudi pour les ateliers.\n"
+)
+
+
+@pytest.fixture
+def lab_notes(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / "notes"
+    (root / "ateliers").mkdir(parents=True)
+    (root / "ateliers" / "labo.md").write_text(_LAB_NOTES, encoding="utf-8")
+    monkeypatch.setenv("PAINTHAKER_NOTES_DIR", str(root))
+    return root
+
+
+@pytest.mark.asyncio
+async def test_notes_answer_cites_a_real_retrieved_line_range(lab_notes) -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input="D'après mes notes, à quelle température imprime Tisserande ?"
+        )
+        result.expect.contains_function_call(name="search_notes")
+        reply = _reply(result)
+        assert "210" in reply
+        citations = re.findall(r"ateliers/labo\.md:(\d+)-(\d+)", reply)
+        assert citations, f"no citation in: {reply!r}"
+        assert any(int(a) <= 4 <= int(b) for a, b in citations)  # fact is on line 4
+        assert all(int(b) <= 6 for _, b in citations)  # no line past the file's end
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in French. Says, based on the user's notes, that "
+                    "Tisserande prints at 210 °C, and cites the notes file."
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_notes_without_the_answer_say_so_without_inventing(lab_notes) -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input="D'après mes notes, quelle est l'adresse IP de Tisserande ?"
+        )
+        result.expect.contains_function_call(name="search_notes")
+        reply = _reply(result)
+        assert not re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", reply), reply
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in French. Says it couldn't find Tisserande's IP "
+                    "address in the passages it retrieved (the search results). "
+                    "Does NOT state that the user's notes don't contain it or that "
+                    "it isn't mentioned anywhere in the notes, and gives no IP "
+                    "address."
+                ),
+            )
+        )

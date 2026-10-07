@@ -144,6 +144,14 @@ To remove everything Painthaker stored, quit it and delete the database file. Ev
 
 If the database can't be read (corrupt, not a Painthaker file, or written by a newer version), Painthaker stops with an explanation and leaves the file untouched. It never replaces or deletes it. Move the file aside, or point `PAINTHAKER_HISTORY_DB` elsewhere.
 
+### Notes search
+
+Set `PAINTHAKER_NOTES_DIR` in `.env.local` to a folder of UTF-8 `.md`/`.txt` notes (outside the repository), then ask about them, for example *« D'après mes notes, quel canal Wi-Fi utilise le routeur du labo ? »*.
+
+- **How it works:** the agent calls `search_notes` (`src/notes.py`), a read-only keyword search that ignores accents and case and skips common words. It returns excerpts with `file:start-end` sources, and the reply cites only those sources. When the retrieved passages don't answer the question, Painthaker says it couldn't find the answer in them. It never claims your notes lack it and never invents a source, and it mentions when a search was incomplete. Without the variable, the tool explains how to enable it.
+- **Limits:** exact words only (no synonyms or embeddings). It skips hidden files, symbolic links and other file types. It reads at most 512 KB per file and 1 000 files per search, and returns about 6 000 characters of excerpts. Skipped or cut results are reported as an incomplete search.
+- **Privacy:** excerpts are sent to the model provider and saved in the conversation history as part of the tool result. Note contents are treated as data, not instructions, and are never logged.
+
 ### First-time setup, or after `uv.lock` changes
 
 ```console

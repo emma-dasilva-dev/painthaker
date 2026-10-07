@@ -18,7 +18,9 @@ It is built with [LiveKit Agents](https://docs.livekit.io/agents/) (Python) and 
   - the model sees the most recent exchanges within a size budget.
 - **Tests:** offline tests that need no API key and run in CI, plus opt-in live tests against Gemini.
 
-**Not built yet (planned):** voice conversations (the STT/TTS pipeline from the starter is configured but not in use), long-term memory of preferences, retrieval over documents (RAG), more tools, and a web frontend. Nothing is deployed.
+- **Notes search:** ask about your own `.md`/`.txt` notes ("D'après mes notes, …"). Painthaker searches the folder set in `PAINTHAKER_NOTES_DIR` with a simple keyword search and cites `file:start-end`. When the retrieved passages don't answer the question, it says it couldn't find the answer in them, not that your notes lack it. See [Notes search](#notes-search).
+
+**Not built yet (planned):** voice conversations (the STT/TTS pipeline from the starter is configured but not in use), long-term memory of preferences, meaning-based retrieval (embeddings), more tools, and a web frontend. Nothing is deployed.
 
 ## Setup (Ubuntu / WSL)
 
@@ -59,6 +61,23 @@ Put these in `my-agent/.env.local`. Git ignores that file; never commit it.
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | LiveKit CLI features such as simulations, and running the agent against LiveKit Cloud |
 
 The offline tests and CI need no credentials.
+
+## Notes search
+
+1. Put UTF-8 `.md` or `.txt` notes in a folder outside the repository, for example `~/notes`.
+2. Add `PAINTHAKER_NOTES_DIR=/home/you/notes` to `my-agent/.env.local`, then restart the chat.
+3. Ask, for example: *« D'après mes notes, quel canal Wi-Fi utilise le routeur du labo ? »*
+
+Painthaker calls the read-only `search_notes` tool. The reply cites sources such as `reseau.md:3-7`, keeps what your notes say separate from general explanations, and says when it couldn't find the answer in the retrieved passages. It never claims your notes don't contain something, since a keyword search can miss differently worded notes, and it mentions when a search was incomplete. If the variable isn't set, ordinary chat works normally and the tool explains how to enable it.
+
+**How it searches:** plain keyword matching, with accents and case ignored and common words skipped. Excerpts include a few lines of context, are ranked by how many different query words they contain, and are read fresh on every search, so edits and deletions apply immediately. It has no synonyms or meaning-based matching, so a question phrased very differently from your notes can miss them.
+
+**Boundaries:**
+- Only non-hidden `.md`/`.txt` files inside the folder are read. Symbolic links are skipped, and files are opened so nothing outside the folder can be reached.
+- Limits: 512 KB per file, 1 000 files and about 6 000 characters of excerpts per search. Anything skipped (too large, not UTF-8, a link) or cut is reported as an incomplete search.
+- Note contents are treated as data, never as instructions, and are never logged.
+
+**Privacy:** retrieved excerpts are sent to the model provider (Google Gemini) to write the answer. They are also saved in the conversation history file, as part of the tool result. Keep the notes folder outside the repository; a `notes/` folder inside it is ignored by Git.
 
 ## Conversation history
 

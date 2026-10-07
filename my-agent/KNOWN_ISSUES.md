@@ -42,6 +42,13 @@ Still to watch:
 - **`lk agent console --text` can't take pastes.** In lk 2.18.8, the console's `Update` handles key events only. Bracketed pastes (`tea.PasteMsg`) are dropped, and the single-line input would turn newlines into spaces and cut text at 1000 characters anyway. Work around it with `src/chat.py` (see README). Reported to LiveKit through `lk docs submit-feedback`.
 - **Native Windows crash.** `lk agent console --text` exits with `0xc0000005` ("Agent exited with no output"). Not diagnosed; use Ubuntu WSL (see README).
 
+## Notes search
+
+- **Keyword matching only.** A question worded differently from the notes ("impression" vs "imprime") finds only what the shared words reach; there are no synonyms or embeddings. A live check (2026-10-07) first exposed a fixed two-word threshold that dropped the only matching passage. The threshold is now relative, with a regression test.
+- **Prompt-injection resistance relies on the prompt.** Excerpts are labelled as data, and the instructions say never to follow requests inside notes, but that isn't a guarantee.
+- **Excerpts leave the machine and persist.** They go to the model provider, and they're saved in the conversation history file as part of the tool result.
+- **Checked live once per case:** a supported question with a citation, and an unsupported one.
+
 ## Testing
 
 - **Simulations haven't been run yet.** `lk agent simulate text --scenarios scenarios.yaml` uses LiveKit Cloud simulation usage. With Gemini's free tier (15 requests/min for `gemini-3.5-flash-lite`), parallel scenarios are likely to fail with 429 errors.

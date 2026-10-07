@@ -31,6 +31,12 @@ htmlcov/
 *.sqlite3-shm
 *.db
 
+# Private notes, if a notes folder is ever placed inside the repository
+# (PAINTHAKER_NOTES_DIR should normally point outside it). Test fixtures under
+# my-agent/tests/fixtures/notes are synthetic and stay tracked.
+/notes/
+/my-agent/notes/
+
 # Logs and generated artifacts
 *.log
 logs/
