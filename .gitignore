@@ -1,0 +1,47 @@
+# Repository-wide ignores. my-agent/.gitignore adds the LiveKit starter's own rules.
+
+# Secrets and local environment files (keep the committed example)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Virtual environments (Windows .venv and any Linux env created in-tree)
+.venv/
+venv/
+env/
+
+# Python caches and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local databases (chat history lives outside the repo, but an override could point here)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Logs and generated artifacts
+*.log
+logs/
+run.json
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
