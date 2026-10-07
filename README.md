@@ -18,7 +18,7 @@ It is built with [LiveKit Agents](https://docs.livekit.io/agents/) (Python) and 
   - the model sees the most recent exchanges within a size budget.
 - **Tests:** offline tests that need no API key and run in CI, plus opt-in live tests against Gemini.
 
-- **Notes search:** ask about your own `.md`/`.txt` notes ("D'après mes notes, …"). Painthaker searches the folder set in `PAINTHAKER_NOTES_DIR` with a simple keyword search and cites `file:start-end`. When the notes don't cover the question, it says so. See [Notes search](#notes-search).
+- **Notes search:** ask about your own `.md`/`.txt` notes ("D'après mes notes, …"). Painthaker searches the folder set in `PAINTHAKER_NOTES_DIR` with a simple keyword search and cites `file:start-end`. When the retrieved passages don't answer the question, it says it couldn't find the answer in them, not that your notes lack it. See [Notes search](#notes-search).
 
 **Not built yet (planned):** voice conversations (the STT/TTS pipeline from the starter is configured but not in use), long-term memory of preferences, meaning-based retrieval (embeddings), more tools, and a web frontend. Nothing is deployed.
 
@@ -68,7 +68,7 @@ The offline tests and CI need no credentials.
 2. Add `PAINTHAKER_NOTES_DIR=/home/you/notes` to `my-agent/.env.local`, then restart the chat.
 3. Ask, for example: *« D'après mes notes, quel canal Wi-Fi utilise le routeur du labo ? »*
 
-Painthaker calls the read-only `search_notes` tool. The reply cites sources such as `reseau.md:3-7`, keeps what your notes say separate from general explanations, and says when your notes don't contain the answer. If the variable isn't set, ordinary chat works normally and the tool explains how to enable it.
+Painthaker calls the read-only `search_notes` tool. The reply cites sources such as `reseau.md:3-7`, keeps what your notes say separate from general explanations, and says when it couldn't find the answer in the retrieved passages. It never claims your notes don't contain something, since a keyword search can miss differently worded notes, and it mentions when a search was incomplete. If the variable isn't set, ordinary chat works normally and the tool explains how to enable it.
 
 **How it searches:** plain keyword matching, with accents and case ignored and common words skipped. Excerpts include a few lines of context, are ranked by how many different query words they contain, and are read fresh on every search, so edits and deletions apply immediately. It has no synonyms or meaning-based matching, so a question phrased very differently from your notes can miss them.
 

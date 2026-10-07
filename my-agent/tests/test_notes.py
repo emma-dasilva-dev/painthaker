@@ -77,6 +77,12 @@ def test_no_matches_returns_nothing_and_no_source(
     payload = search_notes_payload("adresse IP de l'imprimante")
     assert payload["status"] == "no_matches"
     assert payload["excerpts"] == []
+    # Absence of keyword matches is not evidence of absence from the notes.
+    assert "does not show the notes lack the information" in payload["message"]
+    assert "couldn't find it in the retrieved passages" in payload["note"]
+    assert "don't contain" not in payload["note"].replace(
+        "don't say the notes don't contain", ""
+    )
 
 
 def test_hidden_and_unsupported_files_are_never_searched() -> None:
@@ -218,3 +224,14 @@ def test_weaker_matches_are_dropped_when_much_better_ones_exist(
     )
     result = search("canal Wi-Fi routeur Baobab", notes_dir)
     assert {e.source for e in result.excerpts} == {"reseau.md"}  # "canal" alone: noise
+
+
+def test_framing_phrases_are_not_search_terms() -> None:
+    # "D'après mes notes" / "selon mes notes" frame the question; they aren't
+    # about the content and would match any note containing "après".
+    assert query_terms("D'après mes notes, quel canal utilise le routeur ?") == [
+        "canal",
+        "utilise",
+        "routeur",
+    ]
+    assert query_terms("Selon mes notes, à quelle heure ?") == ["heure"]

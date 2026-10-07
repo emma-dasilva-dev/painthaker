@@ -396,9 +396,11 @@ async def test_notes_without_the_answer_say_so_without_inventing(lab_notes) -> N
             .judge(
                 judge_llm,
                 intent=(
-                    "Written in French. Says the user's notes don't mention "
-                    "Tisserande's IP address. Does not give an IP address and does "
-                    "not claim the information cannot exist anywhere."
+                    "Written in French. Says it couldn't find Tisserande's IP "
+                    "address in the passages it retrieved (the search results). "
+                    "Does NOT state that the user's notes don't contain it or that "
+                    "it isn't mentioned anywhere in the notes, and gives no IP "
+                    "address."
                 ),
             )
         )
