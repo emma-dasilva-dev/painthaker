@@ -122,7 +122,10 @@ Checks:
 
 ```console
 uv run --no-sync ruff format && uv run --no-sync ruff check
-uv run --no-sync pytest     # calls Gemini; the free tier allows 15 requests/min, so wait ~1 min between runs
+uv run --no-sync pytest tests/test_language.py tests/test_response_checks.py tests/test_chat_input.py   # offline, no LLM calls
+uv run --no-sync pytest tests/test_agent.py              # live: calls Gemini
+uv run --no-sync pytest tests/test_response_quality.py   # live: run separately
+# The Gemini free tier allows 15 requests/min, so wait ~1 min between live runs.
 ```
 
 `.env.local` must define `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` and `GOOGLE_API_KEY`. It is ignored by Git; never commit it. Open issues are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).

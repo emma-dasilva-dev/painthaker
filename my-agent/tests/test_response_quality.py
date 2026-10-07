@@ -1,0 +1,167 @@
+# Live response-quality checks: each test runs one agent turn against Gemini and
+# combines deterministic checks (tests/response_checks.py) with an LLM judge.
+# The questions are worded differently from the ones that exposed each problem,
+# so they test the rule rather than one memorized answer.
+#
+# Gemini's free tier allows 15 requests/min; run this file on its own, e.g.
+#   uv run --no-sync pytest tests/test_response_quality.py
+# and wait about a minute before the next live run.
+
+import pytest
+from livekit.agents import AgentSession, llm
+from livekit.plugins import google
+from response_checks import (
+    check_concise,
+    check_formatting,
+    check_no_destructive_example,
+    check_no_risk_formula,
+    code_blocks,
+)
+
+from agent import Painthaker
+
+
+def _judge_llm() -> llm.LLM:
+    return google.LLM(model="gemini-3.5-flash-lite")
+
+
+def _reply(result) -> str:
+    return "\n".join(
+        event.item.text_content or ""
+        for event in result.events
+        if event.type == "message" and event.item.role == "assistant"
+    )
+
+
+@pytest.mark.asyncio
+async def test_threat_definition_is_not_limited_to_external_attackers() -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input="En sécurité informatique, qu'est-ce qu'on appelle une menace ?"
+        )
+        reply = _reply(result)
+
+        assert check_formatting(reply) + check_concise(reply, max_words=160) == []
+        assert check_no_risk_formula(reply) == []
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in French. Defines a threat as a potential cause of harm "
+                    "(a circumstance or event that could adversely affect a system or "
+                    "its data). Does not restrict threats to external attackers: it "
+                    "includes or clearly allows for internal/insider sources and "
+                    "unintentional ones such as human error, failures or natural events."
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_risk_relationship_is_not_presented_as_a_formula() -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input=(
+                "Quick one: how do threats, vulnerabilities and risk relate to each other?"
+            )
+        )
+        reply = _reply(result)
+
+        assert check_formatting(reply) + check_concise(reply, max_words=160) == []
+        assert check_no_risk_formula(reply) == []
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in English. Explains that risk arises when a threat could "
+                    "exploit a vulnerability, and that risk depends on how likely that "
+                    "is and how severe the impact would be. Any shorthand relationship "
+                    "is explicitly labelled as a simplification, not presented as an "
+                    "exact formula."
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_file_read_fix_uses_python_and_explains_access_boundaries() -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input=(
+                "Comment je corrige ce code ? Les utilisateurs ne doivent pouvoir "
+                "lire que les fichiers du dossier `reports/`.\n"
+                "```python\n"
+                "import subprocess\n"
+                "name = input('Rapport : ')\n"
+                "subprocess.run('cat reports/' + name, shell=True)\n"
+                "```"
+            )
+        )
+        reply = _reply(result)
+
+        result.expect.contains_function_call(name="inspect_code")
+        assert check_formatting(reply) + check_no_destructive_example(reply) == []
+        fixes = "\n".join(code_blocks(reply))
+        assert "subprocess" not in fixes, (
+            "the fix should not launch a process to read a file"
+        )
+        assert any(api in fixes for api in ("open(", "read_text", "read_bytes"))
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in French. Replaces the shell command with Python's own "
+                    "file reading. Explains that removing or blocking '../' alone does "
+                    "not keep reads inside reports/ (encodings, absolute paths, "
+                    "symlinks), and enforces the boundary by resolving the path and "
+                    "checking it stays within the resolved reports/ directory, an "
+                    "allow-list of names, or operating-system permissions."
+                ),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_command_injection_demo_is_harmless_and_fix_fits_the_task() -> None:
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker())
+        result = await session.run(
+            user_input=(
+                "Is this endpoint helper exploitable? `host` comes from a query "
+                "parameter.\n"
+                "```python\n"
+                "import os\n"
+                "def check(host):\n"
+                "    return os.system('ping -c 1 ' + host)\n"
+                "```"
+            )
+        )
+        reply = _reply(result)
+
+        result.expect.contains_function_call(name="inspect_code")
+        assert check_formatting(reply) + check_no_destructive_example(reply) == []
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in English. States this is a demonstrated command "
+                    "injection because a query parameter reaches os.system. Any example "
+                    "payload is harmless (such as running `id` or `echo`), never "
+                    "destructive. The fix runs ping without a shell, with an argument "
+                    "list, and validates the host (for example with the ipaddress "
+                    "module or an allow-list); it does not rely on a blocklist of "
+                    "characters alone."
+                ),
+            )
+        )

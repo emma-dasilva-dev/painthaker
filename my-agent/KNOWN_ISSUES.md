@@ -2,12 +2,15 @@
 
 Observed but not fixed yet. For each behavior issue, add a scenario to `scenarios.yaml` that reproduces it before changing the prompt (see AGENTS.md).
 
-## Agent behavior (seen in `lk agent console --text`, 2026-10-07)
+## Agent behavior
 
-- **Threats are defined as external only.** The agent described threats as coming only from outside. Threats can also be internal: insiders, mistakes, misconfiguration.
-- **"Threat + Vulnerability = Risk" presented as a formula.** This is a simplification. Risk is usually explained as a combination of likelihood and impact, given a threat and a vulnerability. It shouldn't be taught as literal arithmetic.
-- **French word in an English reply.** An English response contained "risque". The "never mix languages" rule isn't always followed.
-- **Too verbose for simple questions.** Answers to a simple conceptual question were much longer than needed. The "concise by default" rule isn't working well enough.
+Addressed on 2026-10-07 and covered by `tests/test_response_quality.py`, `tests/test_language.py` and `scenarios.yaml`: threats defined as external only, "Threat + Vulnerability = Risk" taught as a formula, raw LaTeX, overly long answers with generic praise, destructive attack examples, `cat`-based fixes, and treating `../` filtering as a file-access boundary. The reply language is now chosen in code (`llm_node` in `src/agent.py`) after replies drifted into French, including partway through an English one.
+
+Still to watch:
+
+- **Destructive examples are prevented by the prompt only.** The cliché `; rm -rf /` appeared in 2 of 5 runs of the file-reading review until the prompt named it explicitly; then 0 of 8 code-review runs. A reply could still use a different destructive example.
+- **Language detection is a word-list heuristic.** It handles French and English only. A message with too few common words (e.g. "ok") keeps the previous language. Mixed-language messages go to whichever language has more cue words.
+- **"Concise" is checked with a 160-word limit in the tests**, on two simple questions only.
 
 ## Runtime
 

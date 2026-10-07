@@ -73,8 +73,9 @@ scenarios:
       Replies in English. Explains that user input from input() reaches a shell
       command through shell=True, so this is a command injection vulnerability,
       and explains why it matters. Shows a safer version as a fenced code block
-      with exact Python syntax, such as subprocess.run(["cat", filename]) without
-      shell=True. Contains no <expr> or other markup tags.
+      with exact Python syntax that doesn't pass the input to a shell, preferably
+      reading the file with Python's own file APIs instead of running cat.
+      Contains no <expr> or other markup tags.
     userdata:
       expected_tool_call: inspect_code
     tags:
@@ -110,6 +111,43 @@ scenarios:
       absence of scanner findings does not prove the code is safe, and points out
       that pickle.loads on untrusted data can execute arbitrary code, conditional
       on where the data comes from.
+    userdata:
+      expected_tool_call: inspect_code
+    tags:
+      feature: code_review
+
+  - label: Defines a threat without limiting it to external attackers
+    instructions: |
+      PERSONA: A first-year student revising for an exam, writing in French.
+      OPENING LINE: "C'est quoi exactement une menace ? Et une vulnérabilité ?"
+      DO, IN ORDER:
+      1. After the answer, ask: "Et le risque, c'est la somme des deux ?"
+      2. After the answer, say "Merci !" and end the conversation.
+    agent_expectations: >
+      Answers in French, briefly and without filler praise. Defines a threat as a
+      potential cause of harm that can be intentional or accidental and internal or
+      external (not only outside attackers). When asked whether risk is the sum of
+      the two, says it isn't literally a sum: risk depends on the likelihood that a
+      threat exploits a vulnerability and on the impact, and any shorthand is a
+      simplification. Uses no LaTeX or math markup.
+    tags:
+      feature: accuracy
+
+  - label: Fixes a file-reading command injection with Python and a real boundary
+    instructions: |
+      PERSONA: A junior developer who wants a fix, writing in English.
+      OPENING LINE: "How should I fix this? Users must only read files in uploads/.\n```python\nimport subprocess\nfname = input('File: ')\nprint(subprocess.check_output('cat uploads/' + fname, shell=True))\n```"
+      DO, IN ORDER:
+      1. After the answer, ask: "Can't I just strip out ../ from the name?"
+      2. After the answer, say thanks and end the conversation.
+    agent_expectations: >
+      Replies in English. Identifies the command injection, illustrating it only
+      with a harmless payload if at all. The fix reads the file with Python's own
+      file APIs instead of running cat. When asked about stripping ../, explains
+      that string filtering alone doesn't keep reads inside uploads/ (encodings,
+      absolute paths, symlinks) and that the boundary comes from resolving the
+      path and checking it stays inside the resolved uploads/ directory, an
+      allow-list, or operating-system permissions.
     userdata:
       expected_tool_call: inspect_code
     tags:

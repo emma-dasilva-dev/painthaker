@@ -86,10 +86,11 @@ async def test_code_review_calls_inspect_code() -> None:
             .judge(
                 judge_llm,
                 intent=(
-                    "Written in English. "
+                    "Written entirely in English, including headings. "
                     "Identifies command injection because user input reaches a "
-                    "shell command via shell=True, and shows a safer version "
-                    "using exact Python syntax (an argument list without shell=True)."
+                    "shell command via shell=True, and shows a safer version in "
+                    "exact Python syntax that doesn't pass the input to a shell "
+                    "(ideally reading the file with Python's own file APIs)."
                 ),
             )
         )
