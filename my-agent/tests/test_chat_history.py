@@ -17,7 +17,7 @@ from scripted_llm import Hang, ScriptedFailureError, ScriptedLLM, ToolCall
 
 from agent import Painthaker
 from chat import ChatApp
-from history import HistoryStore
+from history import HistoryError, HistoryStore
 
 CODE = "import os\n\ndef run(cmd):\n    os.system(cmd)  # indentation kept\n"
 CLOCK = datetime(2026, 10, 7, 9, 30, tzinfo=ZoneInfo("Africa/Porto-Novo"))
@@ -43,7 +43,8 @@ class Harness:
         return self.answers.pop(0)
 
     def printed(self) -> str:
-        return self.output.getvalue()
+        # Whitespace-normalized: the console wraps long lines.
+        return " ".join(self.output.getvalue().split())
 
     def agent_items(self) -> list[llm.ChatItem]:
         return [
@@ -270,3 +271,133 @@ async def test_ctrl_c_during_a_reply_interrupts_without_saving(db: Path) -> None
         "After the interruption.",
     ]
     await h.close()
+
+
+def _fail_saves(store: HistoryStore, times: int) -> None:
+    """Make the next `times` saves fail, as a full disk or locked file would."""
+    real = store.append_turn
+    remaining = [times]
+
+    def flaky(*args, **kwargs):
+        if remaining[0] > 0:
+            remaining[0] -= 1
+            raise HistoryError("Couldn't save the turn: database or disk is full")
+        return real(*args, **kwargs)
+
+    store.append_turn = flaky  # type: ignore[method-assign]
+
+
+async def test_oversized_message_is_refused_not_truncated(db: Path) -> None:
+    h = Harness(db, [])
+    h.app.max_chars = 1_000
+    await h.app.start()
+    big = "def f():\n" + "    x = 1\n" * 200  # 2 009 characters
+    await h.app.handle_input(big)
+    assert "Message non envoyé" in h.printed() and "pas été tronqué" in h.printed()
+    assert "1 000" in h.printed()
+    assert h.llm.requests == []
+    assert h.store.list_conversations() == []
+    await h.close()
+
+
+async def test_failed_save_is_retried_and_reported(db: Path) -> None:
+    h = Harness(db, ["A1.", "A2."])
+    await h.app.start()
+    _fail_saves(h.store, 1)
+    await h.app.handle_input("Question 1")
+    assert "Non enregistré" in h.printed()
+    assert h.store.list_conversations() == []
+    await h.app.handle_input("Question 2")  # retries the pending turn first
+    stored = h.store.load_items(h.app.conversation_id)
+    assert [t for _, t in _texts(stored)] == ["Question 1", "A1.", "Question 2", "A2."]
+    await h.close()
+
+
+@pytest.mark.parametrize("command", ["/new", "/resume"])
+async def test_switching_with_unsaved_turns_needs_explicit_consent(
+    db: Path, command: str
+) -> None:
+    h = Harness(db, ["Autre.", "A1.", "A2."], answers=["non", "oui"])
+    await h.app.start()
+    await h.app.handle_input("Une autre conversation")
+    other = h.app.conversation_id
+    await h.app.handle_input("/new")
+    _fail_saves(h.store, 10)
+    await h.app.handle_input("Question importante")
+    current = h.app.conversation_id
+    target = command if command == "/new" else f"/resume {other[:8]}"
+
+    await h.app.handle_input(target)  # answered "non"
+    assert "n'ont pas pu être enregistrés et seraient perdus" in h.questions[-1]
+    assert "Annulé" in h.printed()
+    assert h.app.conversation_id == current and len(h.app.unsaved) == 1
+    assert [t for _, t in _texts(h.agent_items())] == ["Question importante", "A1."]
+
+    await h.app.handle_input(target)  # answered "oui"
+    assert "abandonné" in h.printed()
+    assert h.app.conversation_id == (None if command == "/new" else other)
+    assert h.app.unsaved == []
+    await h.close()
+
+
+async def test_switch_after_a_recovered_save_asks_nothing(db: Path) -> None:
+    h = Harness(db, ["A1."])
+    await h.app.start()
+    _fail_saves(h.store, 1)
+    await h.app.handle_input("Question")
+    cid = h.app.conversation_id
+    await h.app.handle_input("/new")  # the retry succeeds, so no question
+    assert h.questions == []
+    assert [t for _, t in _texts(h.store.load_items(cid))] == ["Question", "A1."]
+    await h.close()
+
+
+async def test_deleting_the_current_conversation_mentions_unsaved_turns(
+    db: Path,
+) -> None:
+    h = Harness(db, ["A1.", "A2."], answers=["non"])
+    await h.app.start()
+    await h.app.handle_input("Q1")
+    _fail_saves(h.store, 10)
+    await h.app.handle_input("Q2")
+    await h.app.handle_input("/delete " + h.app.conversation_id[:8])
+    assert "1 échange(s) enregistré(s)" in h.questions[-1]
+    assert "1 échange(s) non enregistré(s) seront aussi perdus" in h.questions[-1]
+    assert "Suppression annulée" in h.printed()
+    assert len(h.app.unsaved) == 1
+    await h.close()
+
+
+async def test_tool_call_metadata_survives_save_restart_and_resume(db: Path) -> None:
+    extra = {"provider": {"signature": "c2lnbmF0dXJlLWJ5dGVz"}}
+    first = Harness(
+        db,
+        [
+            ToolCall(
+                "inspect_code", '{"code": "x", "language": "python"}', "c1", extra
+            ),
+            "Reviewed.",
+        ],
+    )
+    await first.app.start()
+    await first.app.handle_input("Review: x")
+    cid = first.app.conversation_id
+    await first.close()
+    [stored_call] = [
+        i for i in HistoryStore(db).load_items(cid) if i["type"] == "function_call"
+    ]
+    assert stored_call["extra"] == extra
+
+    second = Harness(db, ["Follow-up."])
+    await second.app.start()
+    await second.app.handle_input("/resume " + cid[:8])
+    await second.app.handle_input("And now?")
+    [sent_call] = [
+        i for i in second.llm.requests[-1].items if i.type == "function_call"
+    ]
+    assert sent_call.extra == extra and sent_call.call_id == "c1"
+    [sent_output] = [
+        i for i in second.llm.requests[-1].items if i.type == "function_call_output"
+    ]
+    assert sent_output.call_id == "c1"
+    await second.close()

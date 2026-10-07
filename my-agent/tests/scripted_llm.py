@@ -14,6 +14,7 @@ class ToolCall:
     name: str
     arguments: str
     call_id: str
+    extra: dict[str, Any] | None = None  # provider metadata, e.g. a signature
 
 
 class ScriptedFailureError(Exception):
@@ -74,7 +75,10 @@ class _Stream(llm.LLMStream):
                 role="assistant",
                 tool_calls=[
                     llm.FunctionToolCall(
-                        name=step.name, arguments=step.arguments, call_id=step.call_id
+                        name=step.name,
+                        arguments=step.arguments,
+                        call_id=step.call_id,
+                        extra=step.extra,
                     )
                 ],
             )

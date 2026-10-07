@@ -33,10 +33,12 @@ from agent import Painthaker, app_timezone, reply_language
 from conversation import (
     MAX_CONTEXT_TURNS,
     complete_turns,
+    context_char_budget,
     is_complete_turn,
     is_conversation_item,
     make_title,
     parse_command,
+    recent_context,
     text_of,
 )
 from history import (
@@ -106,12 +108,14 @@ class ChatApp:
         confirm: Confirm,
         agent_factory: AgentFactory = Painthaker,
         max_turns: int = MAX_CONTEXT_TURNS,
+        max_chars: int | None = None,
     ) -> None:
         self.store = store
         self.console = console
         self.confirm = confirm
         self.agent_factory = agent_factory
         self.max_turns = max_turns
+        self.max_chars = max_chars or context_char_budget()
         self.session: AgentSession | None = None
         self.agent: Painthaker | None = None
         self._reset_state()
@@ -148,9 +152,11 @@ class ChatApp:
     async def _start_session(self) -> None:
         """(Re)start the agent with the current valid turns as its context."""
         await self._stop_session()
-        items = [item for turn in self.turns[-self.max_turns :] for item in turn]
+        items = self._visible_items()
         chat_ctx = llm.ChatContext.from_dict({"items": items})
-        self.agent = self.agent_factory(chat_ctx=chat_ctx, language=self.language)
+        self.agent = self.agent_factory(
+            chat_ctx=chat_ctx, language=self.language, context_chars=self.max_chars
+        )
         self.session = AgentSession()
         await self.session.start(self.agent)
 
@@ -158,6 +164,35 @@ class ChatApp:
         if self.session is not None:
             await self.session.aclose()
             self.session = None
+
+    def _visible_items(self) -> list[dict[str, Any]]:
+        """The saved turns the model will see, under both context limits."""
+        items = [item for turn in self.turns for item in turn]
+        return recent_context(items, self.max_turns, self.max_chars)
+
+    async def _may_leave_conversation(self, action: str) -> bool:
+        """Before switching conversations: save what's pending, and if that
+        fails, only continue when the user explicitly accepts the loss."""
+        await self._save_unsaved()
+        if not self.unsaved:
+            return True
+        answer = await self.confirm(
+            f"{len(self.unsaved)} échange(s) de « {self.title} » n'ont pas pu être "
+            f"enregistrés et seraient perdus. {action} quand même ? "
+            "Tapez « oui » pour confirmer : "
+        )
+        if answer.strip().lower() in ("oui", "o", "yes", "y"):
+            self.console.print(
+                f"{len(self.unsaved)} échange(s) non enregistré(s) abandonné(s).",
+                style="red",
+            )
+            return True
+        self.console.print(
+            "Annulé : la conversation actuelle reste ouverte. Ses échanges non "
+            "enregistrés seront réessayés au prochain message.",
+            markup=False,
+        )
+        return False
 
     # --- input -------------------------------------------------------------
 
@@ -186,6 +221,16 @@ class ChatApp:
 
     async def send(self, text: str) -> None:
         assert self.session is not None and self.agent is not None
+        if len(text) > self.max_chars:
+            self.console.print(
+                f"Message non envoyé : il fait {_count(len(text))} caractères, plus que "
+                f"la limite de contexte de {_count(self.max_chars)} caractères. Il n'a "
+                "pas été tronqué. Envoyez-le en plusieurs parties (par exemple fonction "
+                "par fonction), ou augmentez PAINTHAKER_CONTEXT_CHARS.",
+                style="red",
+                markup=False,
+            )
+            return
         seen = {item.id for item in self.session.history.items}
         turn_task = asyncio.ensure_future(self.session.run(user_input=text))
         try:
@@ -274,7 +319,10 @@ class ChatApp:
     # --- commands ----------------------------------------------------------
 
     async def new_conversation(self) -> None:
-        await self._save_unsaved()
+        if not await self._may_leave_conversation(
+            "Commencer une nouvelle conversation"
+        ):
+            return
         self._reset_state()
         await self._start_session()
         self.console.print("Nouvelle conversation.")
@@ -306,7 +354,8 @@ class ChatApp:
         except HistoryError as exc:
             self.console.print(str(exc), style="red", markup=False)
             return
-        await self._save_unsaved()
+        if not await self._may_leave_conversation(f"Reprendre « {info.title} »"):
+            return
         self._reset_state()
         self.conversation_id, self.title, self.language = (
             info.id,
@@ -321,11 +370,14 @@ class ChatApp:
             style="bold",
             markup=False,
         )
-        if info.turns > len(self.turns):
+        visible = sum(1 for item in self._visible_items() if item.get("role") == "user")
+        if info.turns > visible:
             self.console.print(
-                f"Le modèle voit les {len(self.turns)} derniers échanges ; "
+                f"Le modèle voit les {visible} derniers échanges (limites : "
+                f"{self.max_turns} échanges, {self.max_chars} caractères) ; "
                 "la transcription complète reste enregistrée.",
                 style="dim",
+                markup=False,
             )
         self._print_recap()
 
@@ -335,9 +387,18 @@ class ChatApp:
         except HistoryError as exc:
             self.console.print(str(exc), style="red", markup=False)
             return
+        is_current = info.id == self.conversation_id
+        if is_current:
+            await self._save_unsaved()
+        unsaved_note = (
+            f" Ses {len(self.unsaved)} échange(s) non enregistré(s) seront aussi perdus."
+            if is_current and self.unsaved
+            else ""
+        )
         answer = await self.confirm(
             f"Supprimer définitivement « {info.title} » ({info.short_id}, "
-            f"{info.turns} échange(s)) ? Tapez « oui » pour confirmer : "
+            f"{info.turns} échange(s) enregistré(s)) ?{unsaved_note} "
+            "Tapez « oui » pour confirmer : "
         )
         if answer.strip().lower() not in ("oui", "o", "yes", "y"):
             self.console.print("Suppression annulée.")
@@ -348,7 +409,7 @@ class ChatApp:
             self.console.print(f"Non supprimée : {exc}", style="red", markup=False)
             return
         self.console.print(f"Conversation {info.short_id} supprimée.")
-        if info.id == self.conversation_id:
+        if is_current:
             self._reset_state()
             await self._start_session()
             self.console.print("Nouvelle conversation.")
@@ -381,6 +442,11 @@ class ChatApp:
         self.console.print("— suite de la conversation —", style="dim")
 
 
+def _count(n: int) -> str:
+    """12345 -> '12 345' (French thousands separator)."""
+    return f"{n:,}".replace(",", " ")
+
+
 def _local_time(info: ConversationInfo) -> str:
     return info.updated_at.astimezone(app_timezone()).strftime("%Y-%m-%d %H:%M")
 
@@ -388,6 +454,11 @@ def _local_time(info: ConversationInfo) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.ERROR)
     console = Console()
+    try:
+        max_chars = context_char_budget()
+    except ValueError as exc:
+        console.print(str(exc), style="bold red", markup=False)
+        raise SystemExit(1) from exc
     try:
         store = HistoryStore(default_db_path())
     except HistoryError as exc:
@@ -405,7 +476,7 @@ async def main() -> None:
         except (KeyboardInterrupt, EOFError):
             return ""
 
-    app = ChatApp(store, console, confirm)
+    app = ChatApp(store, console, confirm, max_chars=max_chars)
     await app.start()
     try:
         while True:

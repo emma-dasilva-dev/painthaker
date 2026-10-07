@@ -1,8 +1,11 @@
 # Offline tests for src/conversation.py: turn validation, context limit,
 # titles and command parsing.
 
+import pytest
+
 from conversation import (
     complete_turns,
+    context_char_budget,
     is_complete_turn,
     make_title,
     parse_command,
@@ -108,3 +111,50 @@ def test_messages_that_look_like_commands_are_still_messages() -> None:
     assert parse_command("/etc/passwd est lisible par tous, c'est grave ?") is None
     assert parse_command("/new\nmais en fait voici mon code") is None
     assert parse_command("Comment marche /resume ?") is None
+
+
+def test_char_budget_drops_oldest_whole_turns() -> None:
+    items = [
+        SYSTEM,
+        user("q1"),
+        reply("x" * 50),
+        user("q2"),
+        call("c2"),
+        output("c2"),
+        reply("y" * 50),
+        user("q3"),
+        reply("z" * 10),
+    ]
+    # Newest turn = 12 chars; with q2's turn (2 + 14 + 2 + 50 = 68) = 80; q1 adds 52.
+    assert recent_context(items, max_turns=20, max_chars=80) == [SYSTEM, *items[3:]]
+    assert recent_context(items, max_turns=20, max_chars=79) == [SYSTEM, *items[7:]]
+    assert recent_context(items, max_turns=20, max_chars=1000) == items
+
+
+def test_both_limits_apply_whichever_is_reached_first() -> None:
+    items = [user("a"), reply("1"), user("b"), reply("2"), user("c"), reply("3")]
+    assert recent_context(items, max_turns=2, max_chars=1000) == items[2:]
+    assert recent_context(items, max_turns=20, max_chars=4) == items[2:]
+
+
+def test_newest_turn_is_kept_even_when_it_alone_exceeds_the_budget() -> None:
+    # e.g. a large tool output in the turn being answered: never cut inside it.
+    items = [
+        user("old"),
+        reply("ok"),
+        user("q"),
+        call("c"),
+        output("c") | {"output": "o" * 500},
+    ]
+    assert recent_context(items, max_turns=20, max_chars=100) == items[2:]
+
+
+def test_char_budget_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAINTHAKER_CONTEXT_CHARS", raising=False)
+    assert context_char_budget() == 60_000
+    monkeypatch.setenv("PAINTHAKER_CONTEXT_CHARS", "120000")
+    assert context_char_budget() == 120_000
+    for bad in ("0", "-5", "lots", "1e5"):
+        monkeypatch.setenv("PAINTHAKER_CONTEXT_CHARS", bad)
+        with pytest.raises(ValueError, match="positive integer"):
+            context_char_budget()

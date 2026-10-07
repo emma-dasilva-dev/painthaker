@@ -118,15 +118,27 @@ How saving works:
 - A conversation is saved after its first completed exchange. Each later exchange (your message, any tool calls with their results, and the reply) is saved as one unit.
 - A reply that fails or that you interrupt with Ctrl+C is **not** saved. It is also removed from what the model sees, so you can simply resend the message.
 - If saving fails, Painthaker says so in red. It retries on your next message and when you quit, and never claims a turn was saved when it wasn't.
+- If unsaved exchanges remain, `/new` and `/resume` ask before switching, and you must type `oui` to abandon them. Anything else keeps you in the current conversation. `/delete` on the open conversation says how many unsaved exchanges would be lost too. Quitting with unsaved exchanges prints a red warning.
 - The title comes from your first message, generated locally with no model call.
 - A resumed conversation keeps its language (French or English). It uses the current instructions and today's date, so dates are never replayed from the past.
 - Instructions, the date note and API keys are never stored.
+- Tool calls are saved with their results and any provider metadata the agent framework puts in the call's `extra` field. The Gemini plugin, however, keeps its *thought signatures* in memory rather than in the chat history, so a resumed conversation sends earlier tool calls without them. Gemini accepted that in testing (2026-10-07, `gemini-3.5-flash-lite`). Google's current documentation doesn't say whether signatures on earlier turns are validated.
 
-**Context limit:** the model sees the current instructions plus the **20 most recent exchanges**. Older exchanges are dropped as whole exchanges, so a tool call is never separated from its result. The full transcript stays in the database. Nothing is summarized automatically.
+**Context limits:** the model sees the current instructions plus the most recent exchanges, within two limits:
+
+- at most **20 exchanges**;
+- at most **60 000 characters** of conversation. The budget counts **characters, not tokens**. It includes message text, tool arguments and tool results, but not the instructions or the language and date notes. At roughly 4 characters per token that's about 15 000 tokens, more for code or French. Set it with `PAINTHAKER_CONTEXT_CHARS`, a positive integer.
+
+Older exchanges are dropped as whole exchanges, newest kept first, so a tool call is never separated from its result. The exchange being answered is always sent, even if a large tool result pushes it over the budget. A **single message longer than the budget is refused** with an explanation and isn't sent or saved; it is never silently cut. Split it into parts, or raise the budget. The full transcript stays in the database, and nothing is summarized automatically.
 
 **Storage:** a SQLite file at `~/.local/share/painthaker/history.sqlite3` (or `$XDG_DATA_HOME/painthaker/…`). Set `PAINTHAKER_HISTORY_DB` to use another file. The file is created readable only by you (`0600`), but it is **not encrypted**. Anyone with access to your Linux account can read your chats, including any code or secrets you pasted. Database files are ignored by Git.
 
-**Deletion:** `/delete` removes the conversation and all its messages in one transaction, with SQLite's `secure_delete` enabled so the content is overwritten in the file. Copies made elsewhere (backups, a copied file) are not affected. To erase everything, quit Painthaker and delete the file.
+**Deletion:** `/delete` removes the conversation and all its messages from the database in one transaction. The deletion is permanent as far as Painthaker is concerned. Painthaker turns on SQLite's `secure_delete` setting, which [overwrites deleted content with zeros](https://www.sqlite.org/pragma.html#pragma_secure_delete) *inside the database file*. This is **not secure erasure**:
+
+- During each write, SQLite copies the pages it changes into a temporary rollback journal (`history.sqlite3-journal`). It then deletes that file without overwriting it, so fragments can stay in free disk space.
+- The filesystem, the WSL virtual disk, SSD wear-levelling, snapshots and backups (including Windows backups of the WSL disk) can keep older copies that SQLite can't reach.
+
+To remove everything Painthaker stored, quit it and delete the database file. Even then, the same storage limitations apply. Don't paste secrets you can't afford to have on disk.
 
 If the database can't be read (corrupt, not a Painthaker file, or written by a newer version), Painthaker stops with an explanation and leaves the file untouched. It never replaces or deletes it. Move the file aside, or point `PAINTHAKER_HISTORY_DB` elsewhere.
 

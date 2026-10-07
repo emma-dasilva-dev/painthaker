@@ -15,6 +15,13 @@ Still to watch:
 - **Destructive examples are prevented by the prompt only.** The cliché `; rm -rf /` appeared in 2 of 5 runs of the file-reading review until the prompt named it explicitly; then 0 of 8 code-review runs. A reply could still use a different destructive example.
 - **Language detection is a word-list heuristic.** It handles French and English only. A message with too few common words (e.g. "ok") keeps the previous language. Mixed-language messages go to whichever language has more cue words.
 - **"Concise" is checked with a 160-word limit in the tests**, on two simple questions only.
+- **Answers about code it hasn't seen.** In a brand-new conversation (2026-10-07), "Dans la fonction que tu viens de vérifier, quel argument de subprocess.run faut-il retirer ?" got a confident "Il faut retirer l'argument shell=True…" instead of saying no code had been shared. The guess was plausible from the question's wording, but the agent should say when the context it's asked about isn't there.
+
+## Conversation history
+
+- **Gemini thought signatures aren't persisted.** The Gemini plugin keeps them in memory on the LLM object (`_thought_signatures`), not in the chat items, so they're lost on restart, on `/resume`, and when a failed turn rebuilds the session. Gemini accepted resumed tool history without them in a live test (2026-10-07). Google's docs don't say whether signatures on earlier turns are validated, so this could change.
+- **Provider errors print a traceback.** When Gemini fails (for example `504 DEADLINE_EXCEEDED`, seen 2026-10-07 after 4 attempts), the SDK logs a traceback to the terminal before Painthaker's own "not saved" message. The turn is correctly discarded, but the output is noisy.
+- **One chat window per conversation.** Two windows writing to the same conversation keep the database consistent, but each window only sees its own exchanges.
 
 ## Runtime
 

@@ -109,7 +109,8 @@ class HistoryStore:
     def _prepare(self, is_new: bool) -> None:
         conn = self._conn
         conn.execute("PRAGMA foreign_keys = ON")
-        # Overwrite deleted content instead of leaving it in free pages.
+        # Zero deleted content inside this file. Not secure erasure: the rollback
+        # journal is deleted unwritten, and filesystem/SSD/backups may keep copies.
         conn.execute("PRAGMA secure_delete = ON")
         if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise sqlite3.DatabaseError("integrity check failed")

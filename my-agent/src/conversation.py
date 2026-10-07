@@ -6,13 +6,19 @@ assistant's reply. Saving, restoring and the context limit all work on whole
 turns, so a tool call is never separated from its output.
 """
 
+import os
 import re
 from collections.abc import Sequence
 from typing import Any
 
-# Context policy: the model sees at most this many of the most recent turns
-# (plus the current system instructions). The full transcript stays on disk.
+# Context policy: the model sees the current system instructions plus the most
+# recent whole turns, at most MAX_CONTEXT_TURNS of them and at most
+# MAX_CONTEXT_CHARS characters of conversation (message text, tool arguments and
+# outputs; instructions and notes not counted). Characters, not tokens: no
+# tokenizer needed, and roughly 4 characters per token for Gemini, so the
+# default is about 15k tokens. The full transcript stays on disk.
 MAX_CONTEXT_TURNS = 20
+MAX_CONTEXT_CHARS = 60_000
 
 # The ChatContext item types that make up a conversation. System messages,
 # handoffs and config updates are rebuilt by the agent, never saved.
@@ -89,14 +95,51 @@ def complete_turns(items: Sequence[Any]) -> list[list[Any]]:
     return [turn for turn in split_turns(items) if is_complete_turn(turn)]
 
 
+def item_chars(item: Any) -> int:
+    """Characters an item contributes to the context budget: message text, tool
+    names and arguments, tool outputs. System messages aren't counted."""
+    kind = _type(item)
+    if kind == "message":
+        return 0 if _role(item) in ("system", "developer") else len(text_of(item))
+    if kind == "function_call":
+        return len(_field(item, "name") or "") + len(_field(item, "arguments") or "")
+    if kind == "function_call_output":
+        return len(_field(item, "output") or "")
+    return 0
+
+
+def context_char_budget() -> int:
+    """PAINTHAKER_CONTEXT_CHARS if set (a positive integer), else the default."""
+    raw = os.environ.get("PAINTHAKER_CONTEXT_CHARS", "").strip()
+    if not raw:
+        return MAX_CONTEXT_CHARS
+    if not raw.isdigit() or int(raw) <= 0:
+        raise ValueError(
+            f"PAINTHAKER_CONTEXT_CHARS must be a positive integer, got {raw!r}"
+        )
+    return int(raw)
+
+
 def recent_context(
-    items: Sequence[Any], max_turns: int = MAX_CONTEXT_TURNS
+    items: Sequence[Any],
+    max_turns: int = MAX_CONTEXT_TURNS,
+    max_chars: int = MAX_CONTEXT_CHARS,
 ) -> list[Any]:
-    """System/developer messages plus the last max_turns turns, cut only at user messages."""
+    """System/developer messages plus the most recent whole turns that fit both
+    limits. The newest turn is always kept (it's the one being answered);
+    older turns are added newest-first until either limit would be exceeded."""
     user_positions = [i for i, item in enumerate(items) if _role(item) == "user"]
-    if len(user_positions) <= max_turns:
+    if not user_positions:
         return list(items)
-    cut = user_positions[-max_turns]
+    bounds = [*user_positions, len(items)]
+    cut = user_positions[-1]
+    used = sum(item_chars(item) for item in items[cut:])
+    kept = 1
+    for start, end in reversed(list(zip(bounds[:-2], bounds[1:-1], strict=True))):
+        size = sum(item_chars(item) for item in items[start:end])
+        if kept >= max_turns or used + size > max_chars:
+            break
+        cut, used, kept = start, used + size, kept + 1
     kept_instructions = [
         item for item in items[:cut] if _role(item) in ("system", "developer")
     ]
