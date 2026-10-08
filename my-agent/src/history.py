@@ -103,6 +103,49 @@ def default_db_path() -> Path:
     return Path(data_home) / "painthaker" / "history.sqlite3"
 
 
+def read_saved_preferences(path: Path) -> dict[str, str] | None:
+    """Saved /prefs values as stored, read without writing anything.
+
+    Unlike HistoryStore, this never creates, migrates or repairs the file: it
+    opens it read-only (for the LiveKit sessions, which don't use history).
+    Returns None if the file doesn't exist, and {} if it holds no preferences
+    yet (empty, or written before /prefs existed). Raises HistoryError if the
+    file can't be read as a Painthaker history database.
+    """
+    if not path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5
+        )
+    except sqlite3.Error as exc:
+        raise HistoryError(f"Can't open the history database {path}: {exc}") from exc
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise HistoryError(
+                f"The history database {path} was written by a newer version "
+                f"(schema {version}); this version reads schema {SCHEMA_VERSION}."
+            )
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if tables and "conversations" not in tables:
+            raise HistoryError(
+                f"{path} is a SQLite file that isn't a Painthaker history database."
+            )
+        if "preferences" not in tables:
+            return {}
+        return dict(conn.execute("SELECT key, value FROM preferences").fetchall())
+    except sqlite3.Error as exc:
+        raise HistoryError(
+            f"Couldn't read preferences from {path} ({exc}). It was left unchanged."
+        ) from exc
+    finally:
+        conn.close()
+
+
 def new_conversation_id() -> str:
     return uuid.uuid4().hex
 

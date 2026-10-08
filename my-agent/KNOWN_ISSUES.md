@@ -49,6 +49,17 @@ Still to watch:
 - **Language overrides recognize explicit requests only.** With `language fr`, an English message gets a French reply unless it says something like "in English" or "en anglais". Other phrasings aren't detected as requests.
 - **Applies everywhere.** Preferences are global, not per conversation.
 
+## Voice
+
+Prepared on 2026-10-08, covered by offline tests (`tests/test_voice.py`) only. No voice session has been run yet.
+
+- **Untested with speech.** It's unknown whether Gemini follows the spoken rules: no Markdown, no code read aloud, short replies, no offers to send code elsewhere. Same for STT accuracy on French and English technical terms, turn-taking without preemptive generation, and latency.
+- **Spoken rules depend on the prompt.** Code picks the rule set; it doesn't check the reply. A reply could still contain Markdown or a code block, which the TTS would read out.
+- **Typed messages in a voice session get spoken rules.** The choice follows the output (audio on means the reply is spoken), not how the user wrote the message. Exact code is best asked for in the terminal chat.
+- **The session note mentions `/list` and `/resume <id>`.** Said aloud, these may sound odd.
+- **Preferences are read once, at session start.** A `/prefs` change in the terminal chat applies to the next voice session.
+- **The browser test needs LiveKit Cloud.** STT and TTS run through LiveKit Inference and use the project's monthly credits, a hard cap on the free plan. The turn detector and adaptive interruptions have free local-development allowances (7,500 and 40,000 requests a month), after which the turn detector falls back to a smaller local model.
+
 ## Notes search
 
 - **Keyword matching only.** A question worded differently from the notes ("impression" vs "imprime") finds only what the shared words reach; there are no synonyms or embeddings. A live check (2026-10-07) first exposed a fixed two-word threshold that dropped the only matching passage. The threshold is now relative, with a regression test.

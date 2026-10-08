@@ -170,6 +170,27 @@ Set `PAINTHAKER_NOTES_DIR` in `.env.local` to a folder of UTF-8 `.md`/`.txt` not
 - **Limits:** exact words only (no synonyms or embeddings). It skips hidden files, symbolic links and other file types. It reads at most 512 KB per file and 1 000 files per search, and returns about 6 000 characters of excerpts. Skipped or cut results are reported as an incomplete search.
 - **Privacy:** excerpts are sent to the model provider and saved in the conversation history as part of the tool result. Note contents are treated as data, not instructions, and are never logged.
 
+### Local voice (browser)
+
+The LiveKit entrypoint (`src/agent.py`) can also run a voice session: the agent runs in WSL and connects to LiveKit Cloud, and you talk to it from Agent Console in a Windows browser. This hasn't been tested with real speech yet; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#voice).
+
+- **Output rules:** each reply uses spoken rules (plain sentences, no Markdown, no code read aloud) when it will be spoken, meaning the session has an enabled audio output. Otherwise it uses the terminal's Markdown rules. Console text mode, `lk agent debugger` and text simulations have no audio output, so they keep the text rules, unchanged.
+- **Preferences:** your saved `/prefs` values are read from the history database **read-only**: the file is never created, migrated or written. With no database yet, the defaults apply. If the database can't be read, the agent logs an error with the reason and starts with the defaults. Preferences can only be changed in the terminal chat.
+- **No history:** voice sessions aren't saved and can't be resumed, and saved text chats aren't loaded. The agent is told it can't send code or messages to any other chat; for exact code, it suggests asking in the terminal chat.
+- **Turn handling:** preemptive generation is off for the first tests. Expressive mode (TTS markup) is off too.
+- **Cost:** speech-to-text (AssemblyAI) and text-to-speech (Fish Audio) use LiveKit Inference credits from your LiveKit Cloud project. On the free Build plan these are $2.50 a month, a hard cap. The LLM is Gemini with your own `GOOGLE_API_KEY` (free tier: 15 requests/min). Check usage and limits in the [LiveKit Cloud dashboard](https://cloud.livekit.io) (**Settings** → **Project** for limits) and, during a session, in Agent Console's **Usage** pane.
+
+Start the agent in WSL. It stays connected to LiveKit Cloud until you stop it:
+
+```console
+cd path/to/painthaker/my-agent
+export UV_PROJECT_ENVIRONMENT="$HOME/.virtualenvs/painthaker"
+export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT" PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
+lk agent dev
+```
+
+Then, in a Windows browser, open your project at [cloud.livekit.io](https://cloud.livekit.io), go to **Agents**, and open Agent Console (**Launch Console**). Set the agent name to `my-agent`, start the session and allow the microphone. To stop, end the session in the browser, then press Ctrl+C in the WSL terminal.
+
 ### First-time setup, or after `uv.lock` changes
 
 ```console
