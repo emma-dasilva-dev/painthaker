@@ -23,6 +23,7 @@ from response_checks import (
 
 from agent import Painthaker, app_timezone
 from chat import TERMINAL_CHAT_NOTE
+from preferences import Preferences
 
 pytestmark = pytest.mark.live
 
@@ -302,6 +303,44 @@ async def test_mac_address_answer_mentions_that_it_can_change() -> None:
                     "Wi-Fi addresses on phones and computers, or an address set in "
                     "software. Does not claim MAC addresses are permanent or can "
                     "never change."
+                ),
+            )
+        )
+
+
+_PERMANENT = re.compile(
+    # Unqualified claims only: "usually stays permanently tied ... but can be
+    # spoofed" is correct, so the judge decides everything subtler.
+    r"permanent (?:\w+ )?(?:fingerprint|identifier|id\b|serial)|never changes?\b|"
+    r"(?<!usually )(?<!typically )(?:remains?|stays?) (?:the same|constant) for "
+    r"(?:life|the lifetime)",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.asyncio
+async def test_definition_does_not_slip_in_an_absolute_claim_in_english() -> None:
+    # Regression (2026-10-07): asked directly about permanence the agent was
+    # right, but a plain definition with /prefs language en and the default
+    # beginner/concise note called the address a "permanent fingerprint" in
+    # passing, as a contrast with IP addresses.
+    async with _judge_llm() as judge_llm, AgentSession() as session:
+        await session.start(Painthaker(preferences=Preferences(language="en")))
+        result = await session.run(user_input="What exactly is a MAC address?")
+        reply = _reply(result)
+        match = _PERMANENT.search(reply)
+        assert match is None, f"absolute claim: {match.group(0)!r} in:\n{reply}"
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge_llm,
+                intent=(
+                    "Written in English. Defines a MAC address. Any statement "
+                    "that it stays the same is qualified (usually, by default) "
+                    "and the reply mentions that the address a device uses can "
+                    "be changed or randomized in software. Never calls it "
+                    "permanent or says it never changes."
                 ),
             )
         )

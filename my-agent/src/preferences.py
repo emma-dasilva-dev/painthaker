@@ -37,7 +37,9 @@ class Preferences:
 _LEVEL_GUIDANCE = {
     "beginner": (
         "a beginner: define technical terms when you first use them, prefer "
-        "plain words and a concrete example, and don't assume prior knowledge"
+        "plain words and a concrete example, and don't assume prior knowledge. "
+        "Simpler must stay true: an analogy may not claim more than the fact "
+        '(for example, "permanent" for something that is only usually fixed)'
     ),
     "intermediate": (
         "an intermediate learner: assume the basics (HTTP, shells, common "
@@ -51,8 +53,9 @@ _LEVEL_GUIDANCE = {
 _LENGTH_GUIDANCE = {
     "concise": (
         "concise: the shortest answer that is still correct and complete enough "
-        "to act on safely. Never drop a caveat, a security warning or a step "
-        "needed for correctness just to be shorter"
+        "to act on safely. Never drop a caveat, a security warning, the main "
+        "exception to a general statement or a step needed for correctness just "
+        "to be shorter"
     ),
     "detailed": (
         "detailed: a fuller explanation with reasoning, an example and the main "

@@ -508,6 +508,12 @@ class Painthaker(Agent):
                   system defaults, virtualization, attackers), state the usual case
                   and then the main exceptions in a few words. This matters most for
                   identifiers and settings that people rely on for security.
+                - This applies to every sentence, not only to what the user asked:
+                  side remarks, comparisons and analogies in a definition ("unlike X,
+                  Y stays the same", "a permanent fingerprint") are claims too. A
+                  beginner-level or concise answer keeps the qualifier ("usually",
+                  "by default") and names the main exception in a few words instead
+                  of dropping it.
 
                 # Security demonstrations
 

@@ -86,7 +86,8 @@ def test_failed_save_raises_and_keeps_the_previous_value(db_path: Path) -> None:
 def test_preferences_note_reflects_values_and_keeps_correctness() -> None:
     concise = preferences_note(Preferences())
     assert "a beginner" in concise and "concise" in concise
-    assert "Never drop a caveat, a security warning or a step" in concise
+    assert "Never drop a caveat, a security warning, the main exception" in concise
+    assert "Simpler must stay true" in concise
     assert "for this reply only" in concise and "does not change" in concise
     detailed = preferences_note(Preferences("en", "advanced", "detailed"))
     assert "an advanced practitioner" in detailed and "detailed" in detailed
