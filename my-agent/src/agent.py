@@ -144,6 +144,84 @@ _FRENCH_WORDS = frozenset(
     ]
 )
 _FRENCH_ACCENTS = re.compile(r"[éèêëàâùûôîïç]")
+# Short requests such as "Read .env.local." or "Trouve auth.py" have one cue at
+# most, so a verb that starts a sentence counts too. Words that are also verbs in
+# the other language (compare, analyse, examine, note, test, ...) are left out.
+_ENGLISH_VERBS = frozenset(
+    [
+        "read",
+        "search",
+        "find",
+        "show",
+        "list",
+        "check",
+        "explain",
+        "open",
+        "look",
+        "display",
+        "describe",
+        "summarize",
+        "review",
+        "tell",
+        "give",
+        "print",
+        "run",
+        "fix",
+        "write",
+        "make",
+        "help",
+        "get",
+        "inspect",
+        "locate",
+        "view",
+    ]
+)
+_FRENCH_VERBS = frozenset(
+    [
+        "lis",
+        "lisez",
+        "cherche",
+        "cherchez",
+        "recherche",
+        "recherchez",
+        "trouve",
+        "trouvez",
+        "montre",
+        "montrez",
+        "affiche",
+        "affichez",
+        "liste",
+        "listez",
+        "vérifie",
+        "vérifiez",
+        "explique",
+        "expliquez",
+        "ouvre",
+        "ouvrez",
+        "regarde",
+        "regardez",
+        "décris",
+        "décrivez",
+        "résume",
+        "résumez",
+        "donne",
+        "donnez",
+        "dis",
+        "dites",
+        "lance",
+        "lancez",
+        "corrige",
+        "corrigez",
+        "écris",
+        "écrivez",
+        "aide",
+        "aidez",
+    ]
+)
+# Words skipped before a sentence's verb: "Please read ...", "Puis cherche ...".
+_LEAD_INS = frozenset(
+    ["please", "now", "then", "ok", "okay", "maintenant", "puis", "ensuite", "alors"]
+)
 _LANGUAGE_NOTES = {
     "fr": (
         "Reply language for this turn: French. Write the entire reply in French, "
@@ -166,19 +244,46 @@ def explicit_language(message: str) -> str | None:
     return None
 
 
+def _is_technical(token: str) -> bool:
+    """A path, file name or identifier such as `../x`, `.env.local`, `auth.py`,
+    `node_modules` or a URL: its letters are not the user's language."""
+    token = token.rstrip(".,;:!?)]}\"'")
+    return any(sep in token for sep in "/\\_.")
+
+
+def _sentence_verbs(prose: str) -> list[str]:
+    """The first word of each sentence, after lead-ins such as "please"."""
+    verbs = []
+    for sentence in re.split(r"[.!?;:\n]+", prose):
+        words = re.findall(r"[a-zà-ÿ'-]+", sentence)
+        while words and words[0] in _LEAD_INS:
+            words.pop(0)
+        if words:
+            verbs.append(words[0])
+    return verbs
+
+
 def detect_language(message: str) -> str | None:
     """'en' or 'fr' if the user's own words clearly indicate it, else None."""
     if requested := explicit_language(message):
         return requested
-    prose = _CODE.sub(" ", message)
-    words = re.findall(r"[a-zà-ÿ'-]+", prose.lower())
+    prose = _CODE.sub(" ", message).lower()
+    prose = re.sub(r"\S+", lambda m: "" if _is_technical(m[0]) else m[0], prose)
+    words = re.findall(r"[a-zà-ÿ'-]+", prose)
     english = sum(word in _ENGLISH_WORDS for word in words)
     french = sum(word in _FRENCH_WORDS for word in words)
-    if _FRENCH_ACCENTS.search(prose.lower()):
+    verbs = _sentence_verbs(prose)
+    english_verb = any(verb in _ENGLISH_VERBS for verb in verbs)
+    french_verb = any(verb in _FRENCH_VERBS for verb in verbs)
+    english += english_verb
+    french += french_verb
+    if _FRENCH_ACCENTS.search(prose):
         french += 2
-    if english >= 2 and english > french:
+    # A sentence-initial verb alone is enough only when the other language has
+    # no cue at all, so "Check le fichier" stays undecided.
+    if (english >= 2 or (english_verb and french == 0)) and english > french:
         return "en"
-    if french >= 2 and french > english:
+    if (french >= 2 or (french_verb and english == 0)) and french > english:
         return "fr"
     return None
 

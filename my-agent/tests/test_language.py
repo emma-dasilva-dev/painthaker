@@ -39,6 +39,59 @@ def test_explicit_requests_switch_language() -> None:
     assert reply_language(["What is XSS?", "Réponds en français s'il te plaît"]) == "fr"
 
 
+def test_short_english_imperatives_are_english() -> None:
+    # These got French replies in the 2026-10-20 live workspace-tools test.
+    for message in [
+        "Read .env.local.",
+        "Read ../something-outside-the-workspace.",
+        "Search node_modules for something.",
+        "Find auth.py",
+        "Show git status",
+        "Check pyproject.toml",
+        "Please read src/agent.py",
+        "List the files in src/",
+    ]:
+        assert detect_language(message) == "en", message
+    assert reply_language(["Read .env.local."]) == "en"
+
+
+def test_short_french_imperatives_are_french() -> None:
+    for message in [
+        "Lis .env.local.",
+        "Cherche node_modules",
+        "Trouve auth.py",
+        "Montre le statut git",
+        "Vérifie pyproject.toml",
+        "Puis affiche src/agent.py",
+    ]:
+        assert detect_language(message) == "fr", message
+
+
+def test_technical_text_alone_does_not_decide_the_language() -> None:
+    for message in [
+        ".env.local",
+        "node_modules",
+        "src/agent.py",
+        "git status",
+        "../the/path/of/this/file.py",
+        "https://example.com/what-is-the-answer",
+        "ok",
+    ]:
+        assert detect_language(message) is None, message
+    assert reply_language(["Can we continue in English please?", "src/agent.py"]) == (
+        "en"
+    )
+    assert reply_language(["Bonjour !", "git status"]) == "fr"
+
+
+def test_a_verb_alone_does_not_beat_the_other_language() -> None:
+    # Franglais: an English verb with a French cue stays undecided (sticky).
+    assert detect_language("Check le fichier") is None
+    assert reply_language(["Bonjour !", "Check le fichier"]) == "fr"
+    # A verb later in a sentence isn't an imperative cue.
+    assert detect_language("Je veux read") is None
+
+
 def test_language_sticks_until_the_user_switches() -> None:
     history = ["Can we continue in English please? What is XSS?", "ok", "thanks"]
     assert reply_language(history) == "en"
