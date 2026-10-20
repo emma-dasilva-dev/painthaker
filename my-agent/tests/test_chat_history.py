@@ -617,6 +617,43 @@ async def test_search_notes_without_a_folder_explains_how_to_enable_it(
     await h.close()
 
 
+async def test_workspace_tools_run_through_the_session_read_only(
+    db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    (project / ".env").write_text("API_KEY=never-shown\n", encoding="utf-8")
+    monkeypatch.setenv("PAINTHAKER_WORKSPACE", str(project))
+    h = Harness(
+        db,
+        [
+            ToolCall("list_files", '{"path": "."}', "w1"),
+            ToolCall("read_file", '{"path": "app.py"}', "w2"),
+            ToolCall("read_file", '{"path": ".env"}', "w3"),
+            "app.py affiche hi (app.py:1). Le fichier .env est protégé.",
+        ],
+    )
+    await h.app.start()
+    names = {tool.info.name for tool in h.app.agent.tools}
+    assert {"list_files", "read_file"} <= names
+    await h.app.handle_input("Que fait mon projet ?")
+
+    outputs = {
+        i["call_id"]: i["output"]
+        for i in h.store.load_items(h.app.conversation_id)
+        if i["type"] == "function_call_output"
+    }
+    assert "'name': 'app.py'" in outputs["w1"] and ".env" not in outputs["w1"]
+    assert "1\\tprint('hi')" in outputs["w2"]
+    assert "'status': 'protected'" in outputs["w3"]
+    assert "never-shown" not in "".join(outputs.values())
+    assert str(tmp_path) not in "".join(outputs.values())
+    assert "tool: read_file" in h.printed()
+    assert sorted(p.name for p in project.iterdir()) == [".env", "app.py"]
+    await h.close()
+
+
 # --- /prefs ---------------------------------------------------------------
 
 ENGLISH_NOTE = "Reply language for this turn: English"
