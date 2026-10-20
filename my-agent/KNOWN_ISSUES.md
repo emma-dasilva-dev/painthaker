@@ -95,6 +95,15 @@ Still not checked by voice: whether Gemini follows every spoken rule (no Markdow
 - **Excerpts leave the machine and persist.** They go to the model provider, and they're saved in the conversation history file as part of the tool result.
 - **Checked live once per case:** a supported question with a citation, and an unsupported one.
 
+## Workspace files
+
+- **First version: bounded and non-recursive.** `list_files` shows one folder at a time (200 entries) and `read_file` returns 300 lines or 12 000 characters per call, so exploring a large project takes many calls. Each call's result also counts toward the conversation's character budget. There is no code search, `git status` or test runner yet.
+- **The block list is name-based.** A secret stored under an ordinary name (`config.yaml`, `settings.py`) is readable. `.env.example` is blocked along with every other `.env.*` file. The ignored folders (`dist`, `build`, …) are refused at any depth, including a source package that happens to be called `build`.
+- **Not checked on native Windows.** The tests ran in WSL (Linux). On native Windows, the checks after opening a file fall back to `realpath`, since there's no `/proc/self/fd`, and `O_NOFOLLOW` doesn't exist there. 8.3 short names (`SECRET~1.JSO`) aren't recognized as protected. The agent doesn't start on native Windows anyway (see [Runtime](#runtime)).
+- **Paths that differ only in case.** On a case-insensitive mount such as `/mnt/c`, a symbolic link whose target spells the workspace path in different case is treated as leading outside and refused. This errs on the safe side.
+- **Prompt-injection resistance relies on the prompt.** File contents are labelled as data, and the instructions say never to follow requests inside them, but that isn't a guarantee.
+- **Not tried with the live model yet.** The tools are covered by offline tests and by a scripted session. No Gemini session or simulation scenario has exercised them.
+
 ## Testing
 
 - **Simulations haven't been run yet.** `lk agent simulate text --scenarios scenarios.yaml` uses LiveKit Cloud simulation usage. With Gemini's free tier (15 requests/min for `gemini-3.5-flash-lite`), parallel scenarios are likely to fail with 429 errors.

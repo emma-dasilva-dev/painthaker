@@ -170,6 +170,18 @@ Set `PAINTHAKER_NOTES_DIR` in `.env.local` to a folder of UTF-8 `.md`/`.txt` not
 - **Limits:** exact words only (no synonyms or embeddings). It skips hidden files, symbolic links and other file types. It reads at most 512 KB per file and 1 000 files per search, and returns about 6 000 characters of excerpts. Skipped or cut results are reported as an incomplete search.
 - **Privacy:** excerpts are sent to the model provider and saved in the conversation history as part of the tool result. Note contents are treated as data, not instructions, and are never logged.
 
+### Workspace files (read-only)
+
+Set `PAINTHAKER_WORKSPACE` in `.env.local` to the **absolute** path of one project folder, for example `PAINTHAKER_WORKSPACE=/home/you/code/my-project`, then restart Painthaker. Without it, the workspace tools are off and say how to enable them. There is no default folder. A relative path, a missing folder, a file, or a filesystem root such as `/` is refused.
+
+- **What it can do:** the agent has two tools (`src/workspace.py`). `list_files(path=".")` lists the immediate entries of one folder, without recursion: names, types (`dir`, `file`, `symlink`) and file sizes, folders first, then by name, at most 200 entries. Truncation is reported. `read_file(path, start_line=1)` returns a UTF-8 text file as numbered lines (`number<TAB>text`), at most 300 lines or 12 000 characters per call. A longer file is reported as truncated with the next `start_line`, so the agent can read on. Lines over 500 characters are cut, and that's reported too.
+- **Read-only, no commands:** nothing can be written, created, deleted, moved or renamed, and no shell or program is run. There's no search, `git` or test tool yet.
+- **Paths:** always relative to the workspace root (`src/agent.py`; `.` is the root). `\` is read as `/`. Absolute paths (`/etc/…`, `C:\…`, `\\server\…`), `~` and any `..` are refused. Each path is resolved with symbolic links followed and must stay inside the resolved workspace root. A link that leads outside is refused, and listings leave it out. Results show only workspace-relative paths, never the host path.
+- **Blocked files:** `.env`, `.env.*` (including `.env.example`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `credentials`, `credentials.*`, `secrets.*`, `.netrc`, `.pgpass`, `.npmrc`, `.pypirc`, `.git-credentials`, and the folders `.ssh`, `.aws`, `.gnupg`. These are never listed or read; a listing reports only how many were hidden. Names are matched case-insensitively, ignoring trailing dots and spaces and anything after `:`, because Windows filesystems (including `/mnt/c` in WSL) open `.ENV` or `.env.` as `.env`. A link to a blocked file is refused too.
+- **Ignored folders:** `.git`, `.venv`, `node_modules`, `__pycache__`, `.pytest_cache`, `.ruff_cache`, `dist`, `build` and `*.egg-info` are left out of listings and can't be listed or read.
+- **Other refusals:** folders passed to `read_file`, files passed to `list_files`, binary files (any NUL byte), invalid UTF-8, files over 512 KB, and pipes or devices. Each gets a status and a short message, never a crash.
+- **Privacy:** file contents you let the agent read are sent to the model provider and saved in the conversation history as part of the tool result. They are treated as data, not instructions. Only statuses and line counts are logged, never paths or contents.
+
 ### Local voice (browser)
 
 The LiveKit entrypoint (`src/agent.py`) can also run a voice session: the agent runs in WSL and connects to LiveKit Cloud, and you talk to it from Agent Console in a Windows browser. This hasn't been tested with real speech yet; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#voice).
