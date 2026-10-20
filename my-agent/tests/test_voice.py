@@ -1,5 +1,6 @@
 # Offline tests for the LiveKit (voice) entrypoint's preparation: text vs spoken
-# output rules, the session note, read-only preferences and turn handling.
+# output rules, the session note, read-only preferences, turn handling and the
+# voice per reply language.
 # No LLM, STT or TTS calls, and no LiveKit connection.
 
 import logging
@@ -7,16 +8,20 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
-from livekit.agents import AgentSession, llm
+from livekit.agents import Agent, AgentSession, ModelSettings, inference, llm
 from scripted_llm import ScriptedLLM
 
 from agent import (
     LIVEKIT_SESSION_NOTE,
+    LUCAS_VOICE,
     PREEMPTIVE_GENERATION,
+    SAWYER_VOICE,
     SPOKEN_INSTRUCTIONS,
     TEXT_INSTRUCTIONS,
+    VOICE_BY_LANGUAGE,
     Painthaker,
     load_saved_preferences,
     speaks_aloud,
@@ -247,3 +252,171 @@ async def test_voice_session_reports_a_database_error_and_uses_defaults(
 
 def test_preemptive_generation_is_off_for_the_first_voice_tests() -> None:
     assert PREEMPTIVE_GENERATION == {"enabled": False}
+
+
+# --- Voice per reply language ---------------------------------------------------
+
+
+class _RecordingTTS(inference.TTS):
+    """The real Inference TTS, recording option changes. It connects only when
+    a stream opens, and these tests never open one."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "fishaudio/s2.1-pro",
+            voice=LUCAS_VOICE,
+            language="fr",
+            api_key="offline-test-key",
+            api_secret="offline-test-secret",
+        )
+        self.updates: list[dict[str, Any]] = []
+
+    def update_options(self, **options: Any) -> None:
+        self.updates.append(options)
+        super().update_options(**options)
+
+
+@dataclass
+class _Session:
+    output: _Output
+    tts: object | None
+
+
+class _SessionAgent(Painthaker):
+    # Agent.session needs a running AgentSession; llm_node only reads its
+    # output and tts.
+    def __init__(self, session: _Session, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._test_session = session
+
+    @property
+    def session(self) -> Any:
+        return self._test_session
+
+
+@pytest.fixture
+def llm_requests(monkeypatch: pytest.MonkeyPatch) -> list[llm.ChatContext]:
+    # Stands in for the model call: records what llm_node sends it.
+    requests: list[llm.ChatContext] = []
+
+    async def fake_llm_node(agent, chat_ctx, tools, model_settings):
+        requests.append(chat_ctx)
+        yield "ok"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    return requests
+
+
+async def _reply(agent: Painthaker, chat_ctx: llm.ChatContext) -> None:
+    async for _ in agent.llm_node(chat_ctx, [], ModelSettings()):
+        pass
+
+
+def _spoken_session() -> _Session:
+    return _Session(output=_Output(audio=object()), tts=_RecordingTTS())
+
+
+def test_each_reply_language_has_its_native_voice() -> None:
+    assert VOICE_BY_LANGUAGE == {"fr": LUCAS_VOICE, "en": SAWYER_VOICE}
+    assert LUCAS_VOICE == "f69bca092b674168a8d02d61ca20943c"
+    assert SAWYER_VOICE == "fa4c9eb3dccc4806b382b40d61c6b10a"
+
+
+@pytest.mark.parametrize(
+    "message, voice, language, note",
+    [
+        ("Qu'est-ce qu'une injection SQL ?", LUCAS_VOICE, "fr", "French"),
+        ("What is an SQL injection?", SAWYER_VOICE, "en", "English"),
+    ],
+    ids=["french-lucas", "english-sawyer"],
+)
+async def test_spoken_reply_uses_the_voice_of_its_language(
+    llm_requests: list[llm.ChatContext],
+    message: str,
+    voice: str,
+    language: str,
+    note: str,
+) -> None:
+    session = _spoken_session()
+    await _reply(_SessionAgent(session), _with_instructions(message))
+    assert session.tts.updates == [{"voice": voice, "language": language}]
+    # Applied through the real update_options, as the next stream will read it.
+    assert session.tts._opts.voice == voice
+    assert session.tts._opts.language == language
+    # The reply text gets the same language.
+    assert f"Reply language for this turn: {note}" in _system_texts(llm_requests[0])[1]
+
+
+async def test_voice_follows_language_switches_in_one_session(
+    llm_requests: list[llm.ChatContext],
+) -> None:
+    session = _spoken_session()
+    agent = _SessionAgent(session)
+    chat_ctx = _with_instructions("Bonjour, qu'est-ce qu'un pare-feu ?")
+    for message in [
+        None,
+        "Can you explain that in English, please?",
+        "Merci, et en français ?",
+    ]:
+        if message:
+            chat_ctx.add_message(role="assistant", content="ok")
+            chat_ctx.add_message(role="user", content=message)
+        await _reply(agent, chat_ctx)
+    assert [u["voice"] for u in session.tts.updates] == [
+        LUCAS_VOICE,
+        SAWYER_VOICE,
+        LUCAS_VOICE,
+    ]
+    assert [u["language"] for u in session.tts.updates] == ["fr", "en", "fr"]
+    notes = [_system_texts(request)[1] for request in llm_requests]
+    assert "French" in notes[0]
+    assert "English" in notes[1]
+    assert "French" in notes[2]
+
+
+async def test_language_preference_also_picks_the_voice(
+    llm_requests: list[llm.ChatContext],
+) -> None:
+    # conversation_language() decides for both: with /prefs language en, a
+    # French message still gets an English reply, so Sawyer speaks it.
+    session = _spoken_session()
+    agent = _SessionAgent(session, preferences=Preferences(language="en"))
+    await _reply(agent, _with_instructions("Qu'est-ce qu'un pare-feu ?"))
+    assert session.tts.updates == [{"voice": SAWYER_VOICE, "language": "en"}]
+    assert "English" in _system_texts(llm_requests[0])[1]
+
+
+@pytest.mark.parametrize(
+    "output",
+    [_Output(audio=None), _Output(audio=object(), audio_enabled=False)],
+    ids=["no-audio", "audio-off"],
+)
+async def test_text_reply_leaves_the_voice_alone(
+    llm_requests: list[llm.ChatContext], output: _Output
+) -> None:
+    tts = _RecordingTTS()
+    await _reply(
+        _SessionAgent(_Session(output=output, tts=tts)),
+        _with_instructions("What is an SQL injection?"),
+    )
+    assert tts.updates == []
+    assert tts._opts.voice == LUCAS_VOICE
+    system = _system_texts(llm_requests[0])
+    assert system[0] == TEXT_INSTRUCTIONS
+    assert "English" in system[1]
+
+
+async def test_spoken_reply_without_an_inference_tts_still_runs(
+    llm_requests: list[llm.ChatContext],
+) -> None:
+    session = _Session(output=_Output(audio=object()), tts=None)
+    await _reply(_SessionAgent(session), _with_instructions("Bonjour"))
+    assert _system_texts(llm_requests[0])[0] == SPOKEN_INSTRUCTIONS
+
+
+def test_turn_context_uses_a_language_it_is_given() -> None:
+    chat_ctx = _with_instructions("Qu'est-ce qu'un pare-feu ?")
+    agent = Painthaker()
+    assert "French" in _system_texts(agent.turn_context(chat_ctx))[1]
+    given = _system_texts(agent.turn_context(chat_ctx, language="en"))
+    assert "Reply language for this turn: English" in given[1]

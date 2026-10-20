@@ -798,7 +798,11 @@ class Painthaker(Agent):
         return explicit_language(latest) or self.preferences.language
 
     def turn_context(
-        self, chat_ctx: llm.ChatContext, *, spoken: bool = False
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        spoken: bool = False,
+        language: str | None = None,
     ) -> llm.ChatContext:
         """What the LLM sees on this call: the instructions and the most recent
         complete turns within the turn and character limits (see
@@ -806,8 +810,10 @@ class Painthaker(Agent):
         and current-date notes. Nothing here is written back to the history.
 
         With `spoken`, the instructions use the spoken output rules instead of
-        the text (Markdown) ones."""
-        language = self.conversation_language(chat_ctx.items)
+        the text (Markdown) ones. `language` is the reply language when the
+        caller already chose it (llm_node, so the voice matches); otherwise
+        it is chosen here with conversation_language()."""
+        language = language or self.conversation_language(chat_ctx.items)
         kept = recent_context(chat_ctx.items, MAX_CONTEXT_TURNS, self._context_chars)
         hidden = self._hidden_turns + _user_count(chat_ctx.items) - _user_count(kept)
         if spoken:
@@ -834,8 +840,19 @@ class Painthaker(Agent):
         # date is read fresh each time, and so is whether the reply is spoken
         # (console mode can switch between text and audio mid-session).
         spoken = speaks_aloud(self.session.output)
+        # One language decision per call, for both the reply text and the voice.
+        language = self.conversation_language(chat_ctx.items)
+        if spoken:
+            # Applies to the speech of this reply: each TTS stream copies the
+            # options when it opens, which happens after this point.
+            tts = self.session.tts
+            if isinstance(tts, inference.TTS):
+                tts.update_options(voice=VOICE_BY_LANGUAGE[language], language=language)
         async for chunk in Agent.default.llm_node(
-            self, self.turn_context(chat_ctx, spoken=spoken), tools, model_settings
+            self,
+            self.turn_context(chat_ctx, spoken=spoken, language=language),
+            tools,
+            model_settings,
         ):
             yield chunk
 
@@ -945,6 +962,18 @@ server = AgentServer()
 
 PREEMPTIVE_GENERATION: PreemptiveGenerationOptions = {"enabled": False}
 
+# Fish Audio voices keep their native accent in every language, so each reply
+# language gets a voice that sounds natural in it. Painthaker.llm_node switches
+# to the voice for the language conversation_language() picked, before the
+# reply is synthesized.
+SAWYER_VOICE = "fa4c9eb3dccc4806b382b40d61c6b10a"  # English
+LUCAS_VOICE = "f69bca092b674168a8d02d61ca20943c"  # French
+
+VOICE_BY_LANGUAGE = {
+    "en": SAWYER_VOICE,
+    "fr": LUCAS_VOICE,
+}
+
 
 async def on_simulation_end(ctx: SimulationContext) -> None:
     # The simulation judge only reads the transcript, so check what it can't see:
@@ -997,8 +1026,12 @@ async def my_agent(ctx: JobContext):
         ),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
+        # Starts with the French voice (French is the default reply language);
+        # Painthaker.llm_node switches voice and language per reply.
         tts=inference.TTS(
-            model="fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"
+            model="fishaudio/s2.1-pro",
+            voice=LUCAS_VOICE,
+            language="fr",
         ),
         turn_handling=TurnHandlingOptions(
             # The LiveKit turn detector determines when the user is done speaking and the agent should respond.
