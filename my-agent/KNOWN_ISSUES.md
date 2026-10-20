@@ -49,6 +49,45 @@ Still to watch:
 - **Language overrides recognize explicit requests only.** With `language fr`, an English message gets a French reply unless it says something like "in English" or "en anglais". Other phrasings aren't detected as requests.
 - **Applies everywhere.** Preferences are global, not per conversation.
 
+## Voice
+
+Prepared on 2026-10-08 and covered by offline tests (`tests/test_voice.py`). A debugger text check the same day confirmed that text replies still use Markdown.
+
+**First browser voice test (2026-10-08): manual observations reported by the user, not automated or measured results.** Agent Console, `lk agent dev` in WSL, preemptive generation off.
+
+- **Interruptions:** the agent stops and follows the new request.
+- **Follow-up questions:** context is kept.
+- **Responsiveness:** no noticeable delay.
+- **Recognition:** generally understood.
+- **English speech:** sounds good.
+- **French speech: clear, but with a very unnatural accent.** Likely cause, from provider documentation and not yet tested: the voice is Fish Audio "Sawyer" (`fa4c9eb3…`), an American English voice. Fish voices are cross-lingual and keep their native accent in every language. No `language` is set on the TTS.
+- **Occasional breaks: undiagnosed.** It isn't known yet whether they come from premature end-of-turn detection or from gaps in audio playback. Interruption and endpointing settings stay unchanged until that is established, for example from Agent Console's Events and Audio panes.
+
+**Bilingual voice routing (implemented 2026-10-19, not yet tested by voice).** `Painthaker.llm_node` now sets the TTS voice and `language` from the same `conversation_language()` result that picks the reply language, on every spoken LLM call. Text-only output leaves the TTS untouched. The session starts with Lucas and `fr`.
+
+Implemented:
+
+- French → Lucas (`f69bca09…`), `language="fr"`
+- English → Sawyer (`fa4c9eb3…`), `language="en"`
+
+Covered by offline tests only (`tests/test_voice.py`, no TTS calls). These check the mapping, the switches and that text output doesn't change the voice, not how it sounds. The change reaches the reply being generated because the framework (livekit-agents 1.8.3) opens that reply's TTS stream after `llm_node` starts, and the stream copies the options when it opens. That ordering comes from the framework's code, not its documentation.
+
+Still to verify manually:
+
+- actual voice switching in a live browser session
+- French quality with Lucas in full conversations
+- English quality with Sawyer after switching mid-conversation
+- switching French → English → French in the same session
+- occasional audio breaks
+
+Still not checked by voice: whether Gemini follows every spoken rule (no Markdown, no code read aloud, no offers to send code elsewhere), and STT accuracy on technical terms.
+
+- **Spoken rules depend on the prompt.** Code picks the rule set; it doesn't check the reply. A reply could still contain Markdown or a code block, which the TTS would read out.
+- **Typed messages in a voice session get spoken rules.** The choice follows the output (audio on means the reply is spoken), not how the user wrote the message. Exact code is best asked for in the terminal chat.
+- **The session note mentions `/list` and `/resume <id>`.** Said aloud, these may sound odd.
+- **Preferences are read once, at session start.** A `/prefs` change in the terminal chat applies to the next voice session.
+- **The browser test needs LiveKit Cloud.** STT and TTS run through LiveKit Inference and use the project's monthly credits, a hard cap on the free plan. The turn detector and adaptive interruptions have free local-development allowances (7,500 and 40,000 requests a month), after which the turn detector falls back to a smaller local model.
+
 ## Notes search
 
 - **Keyword matching only.** A question worded differently from the notes ("impression" vs "imprime") finds only what the shared words reach; there are no synonyms or embeddings. A live check (2026-10-07) first exposed a fixed two-word threshold that dropped the only matching passage. The threshold is now relative, with a regression test.
