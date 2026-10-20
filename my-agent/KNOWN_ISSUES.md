@@ -97,12 +97,15 @@ Still not checked by voice: whether Gemini follows every spoken rule (no Markdow
 
 ## Workspace files
 
-- **First version: bounded and non-recursive.** `list_files` shows one folder at a time (200 entries) and `read_file` returns 300 lines or 12 000 characters per call, so exploring a large project takes many calls. Each call's result also counts toward the conversation's character budget. There is no code search, `git status` or test runner yet.
+- **First version: bounded and non-recursive.** `list_files` shows one folder at a time (200 entries) and `read_file` returns 300 lines or 12 000 characters per call, so exploring a large project takes many calls. Each call's result also counts toward the conversation's character budget. There is no test runner, linter or edit tool.
+- **`search_code` is plain substring matching.** No regular expressions, word boundaries or multi-line matches. Case-insensitive matching uses `str.lower()`, so a few Unicode characters whose lowercase form has a different length (such as `İ`) can put the excerpt slightly off the match. There's no per-file match limit, so one file with many matches can use up the 100-match budget. The search also stops at 2 000 files or 16 MB, after which the result is marked incomplete. Files are searched in walk order, not by relevance.
+- **`git_status` trusts the `git` found on PATH**, as long as it isn't inside the workspace. It reads the user's global Git configuration. Only `core.fsmonitor` is overridden; other settings stay in effect, and none of them makes `status` write or contact a network. Submodules are reported as git reports them. A repository owned by another user is refused by git's `safe.directory` check, and Painthaker doesn't change that setting.
+- **`git_status` reads outside the workspace when the workspace is a subfolder of a repository.** Git reads the enclosing repository's `.git` folder to answer, but only changes inside the workspace are listed.
 - **The block list is name-based.** A secret stored under an ordinary name (`config.yaml`, `settings.py`) is readable. `.env.example` is blocked along with every other `.env.*` file. The ignored folders (`dist`, `build`, …) are refused at any depth, including a source package that happens to be called `build`.
 - **Not checked on native Windows.** The tests ran in WSL (Linux). On native Windows, the checks after opening a file fall back to `realpath`, since there's no `/proc/self/fd`, and `O_NOFOLLOW` doesn't exist there. 8.3 short names (`SECRET~1.JSO`) aren't recognized as protected. The agent doesn't start on native Windows anyway (see [Runtime](#runtime)).
 - **Paths that differ only in case.** On a case-insensitive mount such as `/mnt/c`, a symbolic link whose target spells the workspace path in different case is treated as leading outside and refused. This errs on the safe side.
 - **Prompt-injection resistance relies on the prompt.** File contents are labelled as data, and the instructions say never to follow requests inside them, but that isn't a guarantee.
-- **Not tried with the live model yet.** The tools are covered by offline tests and by a scripted session. No Gemini session or simulation scenario has exercised them.
+- **Not tried with the live model yet.** `list_files` and `read_file` are covered by offline tests and by a scripted session. `search_code` and `git_status` are covered by offline tests that call the tools directly, against real temporary repositories for `git_status`. No Gemini session or simulation scenario has exercised any of them.
 
 ## Testing
 

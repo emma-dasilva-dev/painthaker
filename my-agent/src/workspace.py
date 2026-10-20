@@ -19,13 +19,16 @@ opens ".ENV", ".env." and ".env::$DATA" as ".env".
 
 Files are opened with O_NOFOLLOW and O_NONBLOCK, and the opened descriptor is
 checked again (on Linux through /proc/self/fd), so a path swapped for a symlink
-or a pipe after the check can't redirect the read. Nothing here writes,
+or a pipe after the check can't redirect the read. search_code walks its scope
+without following links, skips protected and ignored names on the way, and
+reads each file through the same checks as read_file. Nothing here writes,
 creates, deletes or runs anything, and host paths never appear in results.
 """
 
 import os
 import re
 import stat
+from collections.abc import Iterator
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -73,6 +76,11 @@ MAX_FILE_BYTES = 512 * 1024  # larger files are refused, not partly read
 MAX_LINES = 300  # lines returned per read_file call
 MAX_LINE_CHARS = 500
 MAX_OUTPUT_CHARS = 12_000  # numbered text returned per read_file call
+MAX_QUERY_CHARS = 200
+MAX_SEARCH_FILES = 2_000  # files opened per search_code call
+MAX_SEARCH_BYTES = 16 * 1024 * 1024  # text read per search_code call
+MAX_SEARCH_MATCHES = 100
+MAX_EXCERPT_CHARS = 160
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 
@@ -317,16 +325,9 @@ def _read_bytes(real: Path, root: Path, shown: str) -> bytes:
     return data
 
 
-def read_file(path: str, start_line: int = 1) -> dict[str, object]:
-    """Numbered lines of a UTF-8 text file in the workspace, from start_line."""
-    root = workspace_root()
-    real, shown = resolve_in_workspace(root, path)
-    if real.is_dir():
-        raise WorkspaceError(
-            "not_a_file",
-            f"'{shown}' is a folder, not a file. Use list_files to see its contents.",
-        )
-    data = _read_bytes(real, root, shown)
+def _text_lines(data: bytes, shown: str) -> list[str]:
+    """The lines of a UTF-8 text file, or a WorkspaceError for binary or
+    non-UTF-8 data. Shared by read_file and search_code."""
     if b"\x00" in data:
         raise WorkspaceError(
             "binary", f"'{shown}' looks like a binary file; only text files are read."
@@ -342,6 +343,19 @@ def read_file(path: str, start_line: int = 1) -> dict[str, object]:
     lines = [line.rstrip("\r") for line in text.split("\n")]
     if lines[-1] == "":
         lines.pop()
+    return lines
+
+
+def read_file(path: str, start_line: int = 1) -> dict[str, object]:
+    """Numbered lines of a UTF-8 text file in the workspace, from start_line."""
+    root = workspace_root()
+    real, shown = resolve_in_workspace(root, path)
+    if real.is_dir():
+        raise WorkspaceError(
+            "not_a_file",
+            f"'{shown}' is a folder, not a file. Use list_files to see its contents.",
+        )
+    lines = _text_lines(_read_bytes(real, root, shown), shown)
     total = len(lines)
     if start_line < 1 or start_line > max(total, 1):
         raise WorkspaceError(
@@ -388,6 +402,158 @@ def read_file(path: str, start_line: int = 1) -> dict[str, object]:
         payload["message"] = " ".join(messages)
     payload["note"] = UNTRUSTED_NOTE
     return payload
+
+
+def _search_candidates(scope: Path, skipped: dict[str, int]) -> Iterator[Path]:
+    """Files under scope in a stable order: names sorted, a folder's files
+    before its subfolders. Protected and ignored names and symbolic links are
+    skipped (and counted), never followed. Lazy, so the caps stop the walk."""
+
+    def unreadable(error: OSError) -> None:
+        skipped["unreadable_folders"] += 1
+
+    for dirpath, dirnames, filenames in os.walk(
+        scope, onerror=unreadable, followlinks=False
+    ):
+        current = Path(dirpath)
+        kept = []
+        for name in sorted(dirnames):
+            if is_protected(name):
+                skipped["protected"] += 1
+            elif is_ignored(name):
+                skipped["ignored"] += 1
+            elif (current / name).is_symlink():
+                skipped["symlinks"] += 1
+            else:
+                kept.append(name)
+        dirnames[:] = kept
+        for name in sorted(filenames):
+            path = current / name
+            if is_protected(name):
+                skipped["protected"] += 1
+            elif is_ignored(name):
+                skipped["ignored"] += 1
+            elif path.is_symlink():
+                skipped["symlinks"] += 1
+            else:
+                yield path
+
+
+def _excerpt(line: str, index: int, length: int) -> str:
+    """The matching line without surrounding whitespace, cut to about
+    MAX_EXCERPT_CHARS around the match ("…" marks a cut)."""
+    text = line.strip()
+    if len(text) <= MAX_EXCERPT_CHARS:
+        return text
+    index -= len(line) - len(line.lstrip())
+    start = index - (MAX_EXCERPT_CHARS - length) // 2
+    start = max(0, min(start, len(text) - MAX_EXCERPT_CHARS))
+    end = start + MAX_EXCERPT_CHARS
+    return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+
+def search_code(
+    query: str, path: str = ".", case_sensitive: bool = False
+) -> dict[str, object]:
+    """Lines containing `query` (plain text, not a pattern) in the workspace
+    files under `path`. Case-insensitive unless case_sensitive is set."""
+    root = workspace_root()
+    if not query.strip():
+        raise WorkspaceError("empty_query", "Give the text to search for.")
+    if "\n" in query or "\r" in query:
+        raise WorkspaceError(
+            "invalid_query",
+            "The search text must be on one line: each line is searched separately.",
+        )
+    if len(query) > MAX_QUERY_CHARS:
+        raise WorkspaceError(
+            "invalid_query",
+            f"The search text is longer than {MAX_QUERY_CHARS} characters.",
+        )
+    real, shown = resolve_in_workspace(root, path)
+    needle = query if case_sensitive else query.lower()
+    skipped = dict.fromkeys(
+        (
+            "binary",
+            "too_large",
+            "not_text",
+            "protected",
+            "ignored",
+            "symlinks",
+            "unreadable",
+            "unreadable_folders",
+        ),
+        0,
+    )
+    candidates = _search_candidates(real, skipped) if real.is_dir() else [real]
+    matches: list[dict[str, object]] = []
+    files_scanned = 0
+    bytes_read = 0
+    stopped = None
+    for file in candidates:
+        if files_scanned >= MAX_SEARCH_FILES:
+            stopped = f"only the first {MAX_SEARCH_FILES} files were searched"
+            break
+        relative = file.relative_to(root).as_posix()
+        files_scanned += 1
+        try:
+            data = _read_bytes(file, root, relative)
+            if bytes_read + len(data) > MAX_SEARCH_BYTES:
+                stopped = f"the {MAX_SEARCH_BYTES // (1024 * 1024)} MB reading limit was reached"
+                break
+            bytes_read += len(data)
+            lines = _text_lines(data, relative)
+        except WorkspaceError as error:
+            skipped[error.status if error.status in skipped else "unreadable"] += 1
+            continue
+        for number, line in enumerate(lines, start=1):
+            index = (line if case_sensitive else line.lower()).find(needle)
+            if index < 0:
+                continue
+            if len(matches) >= MAX_SEARCH_MATCHES:
+                stopped = f"only the first {MAX_SEARCH_MATCHES} matches are shown"
+                break
+            matches.append(
+                {
+                    "file": relative,
+                    "line": number,
+                    "excerpt": _excerpt(line, index, len(query)),
+                }
+            )
+        if stopped:
+            break
+    payload: dict[str, object] = {
+        "status": "ok" if matches else "no_matches",
+        "query": query,
+        "case_sensitive": case_sensitive,
+        "path": shown,
+        "matches": matches,
+        "files_scanned": files_scanned,
+        "truncated": stopped is not None,
+        "skipped": {reason: count for reason, count in skipped.items() if count},
+    }
+    messages = []
+    if not matches:
+        messages.append("No line in the searched files contains this text.")
+    if stopped:
+        messages.append(
+            f"The search stopped early: {stopped}. Narrow the text or the path "
+            "for complete results."
+        )
+    if messages:
+        payload["message"] = " ".join(messages)
+    payload["note"] = UNTRUSTED_NOTE
+    return payload
+
+
+def search_code_payload(
+    query: str, path: str = ".", case_sensitive: bool = False
+) -> dict[str, object]:
+    """What the search_code tool returns to the model."""
+    try:
+        return search_code(query, path, case_sensitive)
+    except WorkspaceError as error:
+        return {"status": error.status, "message": error.message}
 
 
 def list_files_payload(path: str = ".") -> dict[str, object]:

@@ -556,8 +556,15 @@ def test_tools_are_registered_on_painthaker() -> None:
     agent = Painthaker(model=ScriptedLLM([]))
     tools = {tool.info.name: tool for tool in agent.tools}
     # The full tool set: no write, delete, shell or command tool exists.
-    assert set(tools) == {"inspect_code", "search_notes", "list_files", "read_file"}
-    for name in ("list_files", "read_file"):
+    assert set(tools) == {
+        "inspect_code",
+        "search_notes",
+        "list_files",
+        "read_file",
+        "search_code",
+        "git_status",
+    }
+    for name in ("list_files", "read_file", "search_code"):
         description = tools[name].info.description
         assert "workspace" in description
         assert "Read-only" in description
@@ -580,6 +587,6 @@ def test_workspace_module_imports_no_process_or_network_modules() -> None:
             imported |= {alias.name for alias in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add(node.module)
-    assert imported == {"os", "re", "stat", "fnmatch", "pathlib"}
+    assert imported == {"os", "re", "stat", "collections.abc", "fnmatch", "pathlib"}
     for call in ("system(", "popen(", "subprocess", "unlink(", "remove(", "rename("):
         assert call not in source
