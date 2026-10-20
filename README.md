@@ -13,11 +13,12 @@ It is built with [LiveKit Agents](https://docs.livekit.io/agents/) (Python) and 
 - **`inspect_code` tool:** a rule-based scan for risky patterns (`eval`/`exec`, `shell=True`, `innerHTML`, hardcoded secrets, SQL built from strings). The reply keeps *detected patterns*, *confirmed vulnerabilities* and *possible concerns* apart.
 - **Current date and time:** taken from the machine's clock in your timezone (default `Africa/Porto-Novo`, set with `PAINTHAKER_TIMEZONE`).
 - **Saved conversations** in a local SQLite file. Each start opens a new chat, and you can go back to an earlier one:
-  - `/list` shows saved conversations, `/resume <id>` reopens one, `/new` starts another, `/delete <id>` removes one after confirmation, and `/help` shows the commands;
+  - `/list` shows saved conversations, `/resume <id>` reopens one, `/new` starts another, `/delete <id>` removes one after confirmation, `/prefs` shows your preferences, and `/help` shows the commands;
   - failed or interrupted replies are never saved;
   - the model sees the most recent exchanges within a size budget.
 - **Tests:** offline tests that need no API key and run in CI, plus opt-in live tests against Gemini.
 
+- **Preferences:** `/prefs language auto|fr|en`, `/prefs level beginner|intermediate|advanced` and `/prefs length concise|detailed` are saved locally and apply to new and resumed conversations. `/prefs reset` restores the defaults (`auto`, `beginner`, `concise`). A clear request in a message ("réponds en anglais") overrides a setting for that reply only. See [`my-agent/README.md`](my-agent/README.md#preferences).
 - **Notes search:** ask about your own `.md`/`.txt` notes ("D'après mes notes, …"). Painthaker searches the folder set in `PAINTHAKER_NOTES_DIR` with a simple keyword search and cites `file:start-end`. When the retrieved passages don't answer the question, it says it couldn't find the answer in them, not that your notes lack it. See [Notes search](#notes-search).
 
 **Not built yet (planned):** voice conversations (the STT/TTS pipeline from the starter is configured but not in use), long-term memory of preferences, meaning-based retrieval (embeddings), more tools, and a web frontend. Nothing is deployed.

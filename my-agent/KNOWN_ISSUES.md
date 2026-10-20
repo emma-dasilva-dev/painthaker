@@ -28,6 +28,7 @@ Still to watch:
   - **MAC addresses:** Android 10+ randomizes the Wi-Fi MAC address by default (source.android.com), and Apple devices use a private, optionally rotating, address per network. The prompt now has a general rule against absolute words where exceptions matter; it doesn't list individual facts.
   - **History:** the terminal chat gives the agent a note on how saved history works (local saves, new chats start empty, `/list` and `/resume <id>`).
   - **Checks:** each case passed one live check, with different wording from the original question. Other absolute claims can still slip through.
+  - **Regression in English (2026-10-07, after `/prefs`).** A manual check with `/prefs language en` got "MAC addresses never change" again. Asked directly ("Is my MAC address a permanent ID?"), the agent was right 3 of 3 times. A plain definition ("What is a MAC address?") slipped the claim in as an aside or analogy ("a permanent fingerprint, unlike IP addresses") 3 of 3 times with the default beginner/concise note, and 2 of 3 times without it. So the rule only applied when permanence was the question, and the new note made it worse. The prompt now says the rule covers side remarks and analogies, the beginner note says analogies must stay true, and the concise note keeps "the main exception to a general statement". After the change, 1 of 9 English definition runs still said "permanent digital fingerprint" (that reply did mention randomization later), and 1 hedged with "usually" without naming the exception. Covered by `test_definition_does_not_slip_in_an_absolute_claim_in_english` (live), which can therefore fail occasionally.
 
 ## Conversation history
 
@@ -41,6 +42,12 @@ Still to watch:
 - **Event-loop stall warnings at startup.** For example, "event loop blocked for 170ms importing unittest.mock" and "314ms importing anyio._backends._asyncio". The warning suggests importing these modules during process prewarm.
 - **`lk agent console --text` can't take pastes.** In lk 2.18.8, the console's `Update` handles key events only. Bracketed pastes (`tea.PasteMsg`) are dropped, and the single-line input would turn newlines into spaces and cut text at 1000 characters anyway. Work around it with `src/chat.py` (see README). Reported to LiveKit through `lk docs submit-feedback`.
 - **Native Windows crash.** `lk agent console --text` exits with `0xc0000005` ("Agent exited with no output"). Not diagnosed; use Ubuntu WSL (see README).
+
+## Preferences
+
+- **Level and length depend on the prompt.** The language preference is applied in code. `level` and `length` are a per-call note to the model, so how closely replies follow them, and whether a one-off "explique en détail" is honored, depends on the model. Offline tests verify the note reaches the model, not the reply's style. No live Gemini check has been run for preferences yet.
+- **Language overrides recognize explicit requests only.** With `language fr`, an English message gets a French reply unless it says something like "in English" or "en anglais". Other phrasings aren't detected as requests.
+- **Applies everywhere.** Preferences are global, not per conversation.
 
 ## Notes search
 

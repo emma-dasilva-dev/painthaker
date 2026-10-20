@@ -30,6 +30,7 @@ from livekit.plugins import ai_coustics, google
 
 from conversation import MAX_CONTEXT_TURNS, context_char_budget, recent_context
 from notes import search_notes_payload
+from preferences import Preferences, preferences_note
 
 logger = logging.getLogger("agent")
 
@@ -150,13 +151,21 @@ _LANGUAGE_NOTES = {
 }
 
 
-def detect_language(message: str) -> str | None:
-    """'en' or 'fr' if the user's own words clearly indicate it, else None."""
+def explicit_language(message: str) -> str | None:
+    """'en' or 'fr' if the message explicitly asks for that language."""
     prose = _CODE.sub(" ", message)
     if _ASKS_ENGLISH.search(prose):
         return "en"
     if _ASKS_FRENCH.search(prose):
         return "fr"
+    return None
+
+
+def detect_language(message: str) -> str | None:
+    """'en' or 'fr' if the user's own words clearly indicate it, else None."""
+    if requested := explicit_language(message):
+        return requested
+    prose = _CODE.sub(" ", message)
     words = re.findall(r"[a-zà-ÿ'-]+", prose.lower())
     english = sum(word in _ENGLISH_WORDS for word in words)
     french = sum(word in _FRENCH_WORDS for word in words)
@@ -412,6 +421,7 @@ class Painthaker(Agent):
         hidden_turns: int = 0,
         missed_user_turn: bool = False,
         app_note: str | None = None,
+        preferences: Preferences | None = None,
     ) -> None:
         # `clock` returns the current timezone-aware datetime; tests pass a fake one.
         self._clock = clock or partial(datetime.now, app_timezone())
@@ -427,6 +437,8 @@ class Painthaker(Agent):
         # What the application around the agent can do (e.g. the terminal chat's
         # saved history); the agent is also used without it, so it's per app.
         self._app_note = app_note
+        # Saved /prefs values; the chat replaces this when the user changes them.
+        self.preferences = preferences or Preferences()
         super().__init__(
             chat_ctx=chat_ctx,
             # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
@@ -453,10 +465,11 @@ class Painthaker(Agent):
 
                 # Language
 
-                - Each turn, a system note gives the reply language: French by default,
-                  English when the user writes in English or asks for it. Write the
-                  entire reply in that language, including headings and labels, even
-                  after calling a tool.
+                - Each turn, a system note gives the reply language. It already
+                  accounts for the user's saved preference, their latest message and
+                  any explicit request, so always use exactly that language for the
+                  entire reply, including headings and labels, even after calling a
+                  tool.
                 - Never mix languages within a single reply. Code, identifiers, and
                   technical terms stay as written in either language.
 
@@ -495,6 +508,12 @@ class Painthaker(Agent):
                   system defaults, virtualization, attackers), state the usual case
                   and then the main exceptions in a few words. This matters most for
                   identifiers and settings that people rely on for security.
+                - This applies to every sentence, not only to what the user asked:
+                  side remarks, comparisons and analogies in a definition ("unlike X,
+                  Y stays the same", "a permanent fingerprint") are claims too. A
+                  beginner-level or concise answer keeps the qualifier ("usually",
+                  "by default") and names the main exception in a few words instead
+                  of dropping it.
 
                 # Security demonstrations
 
@@ -640,13 +659,22 @@ class Painthaker(Agent):
         )
 
     def conversation_language(self, items: list[llm.ChatItem]) -> str:
-        """The reply language after these items, from this agent's starting language."""
+        """The reply language for the next reply.
+
+        With the language preference on "auto", the established behavior:
+        French by default, following the user's language from this agent's
+        starting language. With "fr" or "en", that language, unless the latest
+        message explicitly asks for the other one (that reply only).
+        """
         user_messages = [
             item.text_content or ""
             for item in items
             if item.type == "message" and item.role == "user"
         ]
-        return reply_language(user_messages, initial=self._initial_language)
+        if self.preferences.language == "auto":
+            return reply_language(user_messages, initial=self._initial_language)
+        latest = user_messages[-1] if user_messages else ""
+        return explicit_language(latest) or self.preferences.language
 
     def turn_context(self, chat_ctx: llm.ChatContext) -> llm.ChatContext:
         """What the LLM sees on this call: the instructions and the most recent
@@ -659,6 +687,7 @@ class Painthaker(Agent):
         chat_ctx = llm.ChatContext(kept)
         chat_ctx.add_message(role="system", content=_LANGUAGE_NOTES[language])
         chat_ctx.add_message(role="system", content=date_note(self._clock()))
+        chat_ctx.add_message(role="system", content=preferences_note(self.preferences))
         if self._app_note:
             chat_ctx.add_message(role="system", content=self._app_note)
         if hidden:

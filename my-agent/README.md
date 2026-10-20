@@ -109,6 +109,7 @@ Each start opens a **new** conversation; an old one is never loaded automaticall
 | `/list` | Saved conversations: short ID, last update, number of exchanges, title |
 | `/resume <id>` | Resume a conversation. Use the ID from `/list` (at least 4 characters). The last two exchanges are shown |
 | `/delete <id>` | Delete a conversation permanently, after you type `oui` to confirm. Anything else cancels |
+| `/prefs` | Show your preferences and how to change them (see [Preferences](#preferences)) |
 | `/help` | Show the commands and keys |
 
 Commands are handled locally and never sent to the model. A single line that starts with one of these commands is always treated as that command. If its argument is malformed, as in `/resume ID`, `/resume the Baobab chat` or `/new please`, Painthaker shows how to use it and sends nothing. Multiline text, paths such as `/etc/passwd …`, and a line starting with an unknown `/word` followed by more text are sent as normal messages.
@@ -125,6 +126,23 @@ How saving works:
 - A resumed conversation keeps its language (French or English). It uses the current instructions and today's date, so dates are never replayed from the past.
 - Instructions, the date note and API keys are never stored.
 - Tool calls are saved with their results and any provider metadata the agent framework puts in the call's `extra` field. The Gemini plugin, however, keeps its *thought signatures* in memory rather than in the chat history, so a resumed conversation sends earlier tool calls without them. Gemini accepted that in testing (2026-10-07, `gemini-3.5-flash-lite`). Google's current documentation doesn't say whether signatures on earlier turns are validated.
+
+### Preferences
+
+Three settings, changed only with `/prefs`, never inferred from what you write:
+
+| Command | Values (default first) | Effect |
+|---|---|---|
+| `/prefs language …` | `auto`, `fr`, `en` | `auto` keeps the usual behavior: French by default, English when you write in or ask for English. `fr` or `en` fixes the reply language |
+| `/prefs level …` | `beginner`, `intermediate`, `advanced` | How much background the explanations assume |
+| `/prefs length …` | `concise`, `detailed` | Reply length. Concise replies still keep caveats, warnings and steps needed for correctness |
+| `/prefs reset` | | Back to `auto`, `beginner`, `concise` |
+
+`/prefs` alone shows the current values. Invalid values get a local message and are never sent to the model.
+
+- **Where they apply:** saved settings apply to new and resumed conversations, and from the next reply in the current one.
+- **One-off requests:** a clear request in a message overrides a setting for that reply only, without changing what's saved. For example, "réponds en anglais" with `language fr`, or "explique en détail" with `length concise`. The language override is detected in code (explicit requests only). The level and length overrides are left to the model.
+- **Storage:** settings are stored in a `preferences` table inside the history database (same file, same `0600` permissions). The table is added automatically to existing databases, and your conversations are unchanged. If saving fails, Painthaker says so in red and the previous value stays in effect.
 
 **Context limits:** the model sees the current instructions plus the most recent exchanges, within two limits:
 

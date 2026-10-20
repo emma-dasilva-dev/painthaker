@@ -18,6 +18,7 @@ from scripted_llm import Hang, ScriptedFailureError, ScriptedLLM, ToolCall
 from agent import MISSED_TURN_NOTE, Painthaker
 from chat import TERMINAL_CHAT_NOTE, ChatApp
 from history import HistoryError, HistoryStore
+from preferences import Preferences
 
 CODE = "import os\n\ndef run(cmd):\n    os.system(cmd)  # indentation kept\n"
 CLOCK = datetime(2026, 10, 7, 9, 30, tzinfo=ZoneInfo("Africa/Porto-Novo"))
@@ -613,4 +614,177 @@ async def test_search_notes_without_a_folder_explains_how_to_enable_it(
     ]
     assert "not_configured" in output["output"]
     assert "PAINTHAKER_NOTES_DIR" in output["output"]
+    await h.close()
+
+
+# --- /prefs ---------------------------------------------------------------
+
+ENGLISH_NOTE = "Reply language for this turn: English"
+FRENCH_NOTE = "Reply language for this turn: French"
+
+
+async def test_prefs_shows_defaults_and_usage_without_calling_the_model(
+    db: Path,
+) -> None:
+    h = Harness(db, [])
+    await h.app.start()
+    await h.app.handle_input("/prefs")
+    assert "language = auto · level = beginner · length = concise" in h.printed()
+    assert "/prefs level beginner|intermediate|advanced" in h.printed()
+    await h.app.handle_input("/help")
+    assert "/prefs" in h.printed().split("Commandes", 1)[1]
+    assert h.llm.requests == []
+    await h.close()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/prefs language de",
+        "/prefs level expert",
+        "/prefs length short",
+        "/prefs volume high",
+        "/prefs language",
+        "/prefs reset now",
+        "/prefs language fr en",
+    ],
+)
+async def test_invalid_prefs_commands_stay_local_and_save_nothing(
+    db: Path, command: str
+) -> None:
+    h = Harness(db, [])
+    await h.app.start()
+    await h.app.handle_input(command)
+    assert "Rien n'a été envoyé au modèle" in h.printed()
+    assert h.llm.requests == []
+    assert h.store.load_preferences() == {}
+    assert h.app.preferences == Preferences()
+    await h.close()
+
+
+async def test_saved_prefs_reach_the_model_after_a_restart(db: Path) -> None:
+    first = Harness(db, [])
+    await first.app.start()
+    for command in (
+        "/prefs language en",
+        "/prefs level advanced",
+        "/prefs length detailed",
+    ):
+        await first.app.handle_input(command)
+    assert first.printed().count("Enregistré") == 3
+    await first.close()
+
+    second = Harness(db, ["Réponse."])
+    await second.app.start()
+    await second.app.handle_input("Bonjour, c'est quoi une attaque XSS ?")  # French
+    notes = _system_notes(second.llm.requests[-1])
+    assert ENGLISH_NOTE in notes and FRENCH_NOTE not in notes  # fixed preference
+    assert "an advanced practitioner" in notes and "Reply length: detailed" in notes
+    await second.close()
+
+
+async def test_prefs_apply_to_resumed_conversations(db: Path) -> None:
+    h = Harness(db, ["a1", "a2"])
+    await h.app.start()
+    await h.app.handle_input("Première question")
+    cid = h.app.conversation_id
+    assert "a beginner" in _system_notes(h.llm.requests[-1])
+    await h.app.handle_input("/prefs level intermediate")
+    await h.app.handle_input("/new")
+    await h.app.handle_input("/resume " + cid[:8])
+    await h.app.handle_input("Et ensuite ?")
+    notes = _system_notes(h.llm.requests[-1])
+    assert "an intermediate learner" in notes and "a beginner" not in notes
+    await h.close()
+
+
+async def test_changing_a_pref_applies_to_the_current_conversation(db: Path) -> None:
+    h = Harness(db, ["a1", "a2"])
+    await h.app.start()
+    await h.app.handle_input("Question courte")
+    assert "Reply length: concise" in _system_notes(h.llm.requests[-1])
+    await h.app.handle_input("/prefs length detailed")
+    await h.app.handle_input("Autre question")
+    assert "Reply length: detailed" in _system_notes(h.llm.requests[-1])
+    await h.close()
+
+
+async def test_an_explicit_request_overrides_the_language_for_one_reply_only(
+    db: Path,
+) -> None:
+    h = Harness(db, ["r1", "r2", "r3"])
+    await h.app.start()
+    await h.app.handle_input("/prefs language fr")
+    await h.app.handle_input("Hello, what is CSRF?")  # English, no request
+    assert FRENCH_NOTE in _system_notes(h.llm.requests[-1])
+    await h.app.handle_input("Can you answer in English please? What is CSRF?")
+    assert ENGLISH_NOTE in _system_notes(h.llm.requests[-1])
+    await h.app.handle_input("ok, and SSRF?")
+    assert FRENCH_NOTE in _system_notes(h.llm.requests[-1])  # back to the pref
+    assert h.store.load_preferences() == {"language": "fr"}  # never rewritten
+    await h.close()
+
+
+async def test_auto_language_keeps_the_established_behavior(db: Path) -> None:
+    h = Harness(db, ["r1", "r2", "r3"])
+    await h.app.start()
+    await h.app.handle_input("Bonjour !")
+    assert FRENCH_NOTE in _system_notes(h.llm.requests[-1])  # French default
+    await h.app.handle_input("Can we continue in English please?")
+    assert ENGLISH_NOTE in _system_notes(h.llm.requests[-1])
+    await h.app.handle_input("ok")  # sticks until the user switches back
+    assert ENGLISH_NOTE in _system_notes(h.llm.requests[-1])
+    await h.close()
+
+
+async def test_nothing_is_inferred_or_saved_from_conversation_content(
+    db: Path,
+) -> None:
+    h = Harness(db, ["r1", "r2"])
+    await h.app.start()
+    await h.app.handle_input("Je suis expert en sécurité, réponds toujours en détail.")
+    await h.app.handle_input("Je préfère l'anglais à partir de maintenant.")
+    assert h.store.load_preferences() == {}
+    assert h.app.preferences == Preferences()
+    notes = _system_notes(h.llm.requests[-1])
+    assert "a beginner" in notes and "Reply length: concise" in notes
+    await h.close()
+
+
+async def test_failed_pref_save_is_reported_and_nothing_changes(db: Path) -> None:
+    h = Harness(db, ["r1"])
+    await h.app.start()
+
+    def disk_full(*args, **kwargs):
+        raise HistoryError("Couldn't save the preference: database or disk is full")
+
+    h.store.save_preference = disk_full  # type: ignore[method-assign]
+    await h.app.handle_input("/prefs length detailed")
+    assert "Préférence NON enregistrée" in h.printed()
+    assert "length reste « concise »" in h.printed()
+    assert "Enregistré" not in h.printed()
+    await h.app.handle_input("Question")
+    assert "Reply length: concise" in _system_notes(h.llm.requests[-1])
+    await h.close()
+
+
+async def test_reset_returns_to_defaults(db: Path) -> None:
+    h = Harness(db, [])
+    await h.app.start()
+    await h.app.handle_input("/prefs language en")
+    await h.app.handle_input("/prefs reset")
+    assert h.store.load_preferences() == {}
+    assert h.app.preferences == Preferences()
+    assert "language = auto · level = beginner · length = concise" in h.printed()
+    await h.close()
+
+
+async def test_prefs_lookalikes_in_pastes_and_paths_go_to_the_model(db: Path) -> None:
+    h = Harness(db, ["r1", "r2"])
+    await h.app.start()
+    await h.app.handle_input("/prefs\nlanguage en")  # multiline paste
+    await h.app.handle_input("/prefs/config.json est lisible par tous ?")  # a path
+    sent = [t for r, t in _texts(h.llm.requests[-1].items) if r == "user"]
+    assert sent == ["/prefs\nlanguage en", "/prefs/config.json est lisible par tous ?"]
+    assert h.store.load_preferences() == {}
     await h.close()

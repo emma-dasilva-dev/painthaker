@@ -51,6 +51,8 @@ from history import (
     default_db_path,
     new_conversation_id,
 )
+from preferences import OPTIONS as PREFERENCE_OPTIONS
+from preferences import Preferences
 
 KEYS = (
     "Entrée : envoyer · Alt+Entrée : nouvelle ligne · "
@@ -63,6 +65,7 @@ Commandes (traitées localement, jamais envoyées au modèle) :
   /list           conversations enregistrées
   /resume <id>    reprendre une conversation (ID affiché par /list)
   /delete <id>    supprimer une conversation (confirmation demandée)
+  /prefs          afficher vos préférences (langue, niveau, longueur)
   /help           cette aide
 """
     + KEYS
@@ -81,6 +84,15 @@ TERMINAL_CHAT_NOTE = (
     "/resume <id>. Don't claim the chat has no saved history, and don't guess "
     "what an unloaded conversation contained."
 )
+
+PREFS_USAGE = """\
+Usage :
+  /prefs                                     afficher les préférences
+  /prefs language auto|fr|en                 langue des réponses (auto : français par défaut, anglais si vous écrivez en anglais)
+  /prefs level beginner|intermediate|advanced niveau des explications
+  /prefs length concise|detailed             longueur des réponses
+  /prefs reset                               revenir aux valeurs par défaut (auto, beginner, concise)
+Une demande explicite dans un message (« réponds en anglais », « explique en détail ») s'applique à cette réponse seulement."""
 
 AgentFactory = Callable[..., Painthaker]
 Confirm = Callable[[str], Awaitable[str]]
@@ -135,6 +147,8 @@ class ChatApp:
         self.max_chars = max_chars or context_char_budget()
         self.session: AgentSession | None = None
         self.agent: Painthaker | None = None
+        # Saved /prefs values, loaded in start() and applied to every session.
+        self.preferences = Preferences()
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -152,6 +166,15 @@ class ChatApp:
     # --- session lifecycle -------------------------------------------------
 
     async def start(self) -> None:
+        try:
+            stored = await asyncio.to_thread(self.store.load_preferences)
+            self.preferences = Preferences.from_stored(stored)
+        except HistoryError as exc:
+            self.console.print(
+                f"Préférences non chargées ({exc}) ; valeurs par défaut utilisées.",
+                style="red",
+                markup=False,
+            )
         await self._start_session()
         try:
             latest = await asyncio.to_thread(self.store.list_conversations, 1)
@@ -184,6 +207,7 @@ class ChatApp:
             hidden_turns=self.unloaded_turns + len(self.turns) - visible_turns,
             missed_user_turn=missed_user_turn,
             app_note=TERMINAL_CHAT_NOTE,
+            preferences=self.preferences,
         )
         self.session = AgentSession()
         await self.session.start(self.agent)
@@ -260,6 +284,8 @@ class ChatApp:
             await self.resume(argument)
         elif name == "delete":
             await self.delete(argument)
+        elif name == "prefs":
+            await self.prefs(argument)
 
     async def send(self, text: str) -> None:
         assert self.session is not None and self.agent is not None
@@ -458,6 +484,76 @@ class ChatApp:
             self._reset_state()
             await self._start_session()
             self.console.print("Nouvelle conversation.")
+
+    async def prefs(self, argument: str | None) -> None:
+        """Show, set or reset preferences. A value changes only once saved."""
+        words = (argument or "").split()
+        if not words:
+            self._print_prefs()
+            return
+        if [w.lower() for w in words] == ["reset"]:
+            try:
+                await asyncio.to_thread(self.store.reset_preferences)
+            except HistoryError as exc:
+                self.console.print(
+                    f"Préférences NON réinitialisées : {exc}\nLes valeurs actuelles "
+                    "restent en vigueur.",
+                    style="bold red",
+                    markup=False,
+                )
+                return
+            self._apply_preferences(Preferences())
+            self.console.print("Préférences réinitialisées et enregistrées.")
+            self._print_prefs(usage=False)
+            return
+        key = words[0].lower()
+        if len(words) == 2 and key in PREFERENCE_OPTIONS:
+            value = words[1].lower()
+            if value not in PREFERENCE_OPTIONS[key]:
+                choices = "|".join(PREFERENCE_OPTIONS[key])
+                self.console.print(
+                    f"Valeur invalide pour {key} : « {words[1]} ». Choix possibles : "
+                    f"{choices}. (Rien n'a été envoyé au modèle ni enregistré.)",
+                    markup=False,
+                )
+                return
+            try:
+                await asyncio.to_thread(self.store.save_preference, key, value)
+            except HistoryError as exc:
+                self.console.print(
+                    f"Préférence NON enregistrée : {exc}\n{key} reste "
+                    f"« {getattr(self.preferences, key)} ».",
+                    style="bold red",
+                    markup=False,
+                )
+                return
+            self._apply_preferences(self.preferences.with_value(key, value))
+            self.console.print(
+                f"Enregistré : {key} = {value}. S'applique dès la prochaine réponse, "
+                "ici et dans les autres conversations.",
+                markup=False,
+            )
+            return
+        self.console.print(
+            f"Commande /prefs non reconnue : « {argument} ». (Rien n'a été envoyé "
+            "au modèle.)\n" + PREFS_USAGE,
+            markup=False,
+        )
+
+    def _apply_preferences(self, prefs: Preferences) -> None:
+        self.preferences = prefs
+        if self.agent is not None:
+            self.agent.preferences = prefs  # takes effect on the next LLM call
+
+    def _print_prefs(self, usage: bool = True) -> None:
+        p = self.preferences
+        self.console.print(
+            f"Préférences : language = {p.language} · level = {p.level} · "
+            f"length = {p.length}",
+            markup=False,
+        )
+        if usage:
+            self.console.print(PREFS_USAGE, markup=False, style="dim")
 
     # --- display -----------------------------------------------------------
 

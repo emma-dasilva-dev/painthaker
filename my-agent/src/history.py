@@ -58,6 +58,15 @@ CREATE INDEX items_by_turn ON items (conversation_id, turn);
     + _EXCHANGES
 )
 
+# User preferences set with /prefs (see preferences.py): one row per key.
+_PREFERENCES = """
+CREATE TABLE IF NOT EXISTS preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
 # Version 1 -> 2: existing turns get stable "legacy-<turn>" exchange IDs.
 _MIGRATE_1_TO_2 = (
     _EXCHANGES
@@ -154,6 +163,18 @@ class HistoryStore:
         conn.execute("PRAGMA secure_delete = ON")
         if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise sqlite3.DatabaseError("integrity check failed")
+        self._prepare_schema(is_new)
+        # Additive and optional, so it doesn't bump the schema version: older
+        # versions of Painthaker still open the file and simply ignore it.
+        has_preferences = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'"
+        ).fetchone()
+        if not has_preferences:
+            with self._transaction():
+                conn.execute(_PREFERENCES)
+
+    def _prepare_schema(self, is_new: bool) -> None:
+        conn = self._conn
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version == SCHEMA_VERSION:
             return
@@ -315,6 +336,33 @@ class HistoryStore:
                 "DELETE FROM conversations WHERE id = ?", (conversation_id,)
             )
             return deleted.rowcount > 0
+
+    def load_preferences(self) -> dict[str, str]:
+        """Saved /prefs values as stored (validated by preferences.py)."""
+        with self._lock, self._wrap_errors("load preferences"):
+            rows = self._conn.execute("SELECT key, value FROM preferences").fetchall()
+        return dict(rows)
+
+    def save_preference(self, key: str, value: str) -> None:
+        with (
+            self._lock,
+            self._wrap_errors("save the preference"),
+            self._transaction() as db,
+        ):
+            db.execute(
+                "INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)"
+                " ON CONFLICT (key) DO UPDATE SET value = excluded.value,"
+                " updated_at = excluded.updated_at",
+                (key, value, _now()),
+            )
+
+    def reset_preferences(self) -> None:
+        with (
+            self._lock,
+            self._wrap_errors("reset preferences"),
+            self._transaction() as db,
+        ):
+            db.execute("DELETE FROM preferences")
 
     @contextmanager
     def _wrap_errors(self, action: str) -> Iterator[None]:
