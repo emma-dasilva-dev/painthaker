@@ -97,7 +97,7 @@ Still not checked by voice: whether Gemini follows every spoken rule (no Markdow
 
 ## Workspace files
 
-- **First version: bounded and non-recursive.** `list_files` shows one folder at a time (200 entries) and `read_file` returns 300 lines or 12 000 characters per call, so exploring a large project takes many calls. Each call's result also counts toward the conversation's character budget. There is no test runner, linter or edit tool.
+- **First version: bounded and non-recursive.** `list_files` shows one folder at a time (200 entries) and `read_file` returns 300 lines or 12 000 characters per call, so exploring a large project takes many calls. Each call's result also counts toward the conversation's character budget. There is no edit tool.
 - **`search_code` is plain substring matching.** No regular expressions, word boundaries or multi-line matches. Case-insensitive matching uses `str.lower()`, so a few Unicode characters whose lowercase form has a different length (such as `İ`) can put the excerpt slightly off the match. There's no per-file match limit, so one file with many matches can use up the 100-match budget. The search also stops at 2 000 files or 16 MB, after which the result is marked incomplete. Files are searched in walk order, not by relevance.
 - **`git_status` trusts the `git` found on PATH**, as long as it isn't inside the workspace. It reads the user's global Git configuration. Only `core.fsmonitor` is overridden; other settings stay in effect, and none of them makes `status` write or contact a network. Submodules are reported as git reports them. A repository owned by another user is refused by git's `safe.directory` check, and Painthaker doesn't change that setting.
 - **`git_status` reads outside the workspace when the workspace is a subfolder of a repository.** Git reads the enclosing repository's `.git` folder to answer, but only changes inside the workspace are listed.
@@ -106,6 +106,16 @@ Still not checked by voice: whether Gemini follows every spoken rule (no Markdow
 - **Paths that differ only in case.** On a case-insensitive mount such as `/mnt/c`, a symbolic link whose target spells the workspace path in different case is treated as leading outside and refused. This errs on the safe side.
 - **Prompt-injection resistance relies on the prompt.** File contents are labelled as data, and the instructions say never to follow requests inside them, but that isn't a guarantee.
 - **Not tried with the live model yet.** `list_files` and `read_file` are covered by offline tests and by a scripted session. `search_code` and `git_status` are covered by offline tests that call the tools directly, against real temporary repositories for `git_status`. No Gemini session or simulation scenario has exercised any of them.
+
+## Verification tools
+
+- **`run_tests` runs the project's code.** Its tests and `conftest.py` files can modify or delete files, make network requests, start processes, or print secrets they read from files. Painthaker removes secret-looking environment variables and redacts their values if they appear in the output, and hides the workspace, Python-environment and home paths. A secret stored in a file or under an ordinary variable name, and other host paths, are passed on as printed. The wrapper writes no pytest cache or bytecode, but it can't stop the tests from writing.
+- **Painthaker's own Python environment runs the tests.** A project whose dependencies aren't installed there fails with import errors, and nothing is installed. A workspace whose project has its own virtualenv gets no special handling. If Painthaker itself runs from a virtualenv inside the workspace, both tools refuse to start.
+- **The project's own configuration applies.** pytest reads the project's `pyproject.toml`, `pytest.ini` or `conftest.py` (`addopts`, plugins, markers), possibly from a parent folder of the workspace. Installed pytest plugins load as usual. Ruff reads the project's configuration, except that fixing is always off.
+- **Bounded, not sandboxed.** Runs are stopped after 120 seconds (tests) or 30 seconds (Ruff), and the whole process group is killed. A test process that leaves that group (for example by calling `setsid`) can survive the timeout. Output is captured in a temporary file outside the workspace, which a very noisy run can make large until the timeout. There's no CPU, memory or network limit.
+- **Paths are checked once.** The target is resolved and checked before pytest starts; a folder swapped for a link after that check isn't re-checked.
+- **Not tried with the live model yet.** Both tools are covered by offline tests that run the real pytest and Ruff on temporary projects. No Gemini session has called them.
+- **POSIX only.** The process-group kill and the tests that use links and shell scripts assume Linux or macOS; the agent doesn't start on native Windows anyway.
 
 ## Testing
 
