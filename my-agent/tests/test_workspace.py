@@ -563,6 +563,8 @@ def test_tools_are_registered_on_painthaker() -> None:
         "read_file",
         "search_code",
         "git_status",
+        "run_tests",
+        "run_linter",
     }
     for name in ("list_files", "read_file", "search_code"):
         description = tools[name].info.description
